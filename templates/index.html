@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>영상 소스 다운로더</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Apple SD Gothic Neo", -apple-system, sans-serif;
+    background: #f4f5f7; color: #1a1a2e; padding: 40px 16px;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 24px; margin-bottom: 6px; }
+  .sub { color: #666; font-size: 14px; margin-bottom: 24px; }
+  textarea {
+    width: 100%; height: 120px; padding: 14px; font-size: 14px;
+    border: 1.5px solid #d5d8de; border-radius: 10px; resize: vertical;
+    font-family: inherit; background: #fff;
+  }
+  textarea:focus { outline: none; border-color: #4a6cf7; }
+  .btns { display: flex; gap: 10px; margin: 14px 0 28px; flex-wrap: wrap; }
+  button {
+    padding: 12px 22px; font-size: 15px; font-weight: 600; border: none;
+    border-radius: 10px; cursor: pointer; font-family: inherit;
+  }
+  .primary { background: #4a6cf7; color: #fff; }
+  .primary:hover { background: #3a5ae0; }
+  .ghost { background: #e8eaf0; color: #333; }
+  .ghost:hover { background: #dde0e8; }
+  .summary { font-size: 13px; color: #666; margin-bottom: 10px; }
+  .job {
+    background: #fff; border-radius: 10px; padding: 14px 16px;
+    margin-bottom: 10px; border: 1px solid #e5e7ec;
+  }
+  .job-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+  .job-title {
+    font-size: 14px; font-weight: 600; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; flex: 1;
+  }
+  .badge {
+    font-size: 12px; font-weight: 700; padding: 3px 10px;
+    border-radius: 20px; white-space: nowrap;
+  }
+  .b-wait { background: #eee; color: #777; }
+  .b-run  { background: #e3f2fd; color: #1565c0; }
+  .b-done { background: #e8f5e9; color: #2e7d32; }
+  .b-fail { background: #ffebee; color: #c62828; }
+  .bar { height: 6px; background: #edeef2; border-radius: 3px; margin-top: 10px; overflow: hidden; }
+  .bar-fill { height: 100%; background: #4a6cf7; border-radius: 3px; transition: width .3s; }
+  .err { margin-top: 8px; font-size: 13px; color: #c62828; }
+  .empty { text-align: center; color: #aaa; font-size: 14px; padding: 30px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎬 영상 소스 다운로더</h1>
+  <p class="sub">유튜브 · 인스타그램 · 틱톡 · 도우인 · 샤오홍슈 — 원본 최고 화질로 받아요</p>
+
+  <textarea id="urls" placeholder="영상 주소를 붙여넣으세요. 여러 개면 한 줄에 하나씩!&#10;https://www.youtube.com/watch?v=...&#10;https://www.tiktok.com/@.../video/..."></textarea>
+  <div class="btns">
+    <button class="primary" onclick="startDownload()">⬇️ 다운로드 시작</button>
+    <button class="ghost" onclick="openFolder()">📂 저장 폴더 열기</button>
+    <button class="ghost" onclick="clearDone()">🧹 끝난 항목 지우기</button>
+  </div>
+
+  <div class="summary" id="summary"></div>
+  <div id="jobs"><div class="empty">아직 받은 영상이 없어요</div></div>
+</div>
+
+<script>
+async function startDownload() {
+  const text = document.getElementById('urls').value.trim();
+  if (!text) { alert('영상 주소를 먼저 붙여넣어주세요!'); return; }
+  const res = await fetch('/api/download', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({urls: text})
+  });
+  const data = await res.json();
+  if (res.ok) { document.getElementById('urls').value = ''; refresh(); }
+  else alert(data.error || '문제가 생겼어요.');
+}
+
+async function openFolder() { await fetch('/api/open-folder', {method: 'POST'}); }
+async function clearDone() { await fetch('/api/clear-done', {method: 'POST'}); refresh(); }
+
+function badge(status) {
+  if (status === '완료') return 'b-done';
+  if (status === '실패') return 'b-fail';
+  if (status === '대기 중') return 'b-wait';
+  return 'b-run';
+}
+
+async function refresh() {
+  const res = await fetch('/api/status');
+  const data = await res.json();
+  const box = document.getElementById('jobs');
+  if (!data.jobs.length) {
+    box.innerHTML = '<div class="empty">아직 받은 영상이 없어요</div>';
+    document.getElementById('summary').textContent = '';
+    return;
+  }
+  const done = data.jobs.filter(j => j.status === '완료').length;
+  const fail = data.jobs.filter(j => j.status === '실패').length;
+  const run = data.jobs.length - done - fail;
+  document.getElementById('summary').textContent =
+    `진행 중 ${run} · 완료 ${done} · 실패 ${fail} — 저장 위치: ${data.download_dir}`;
+
+  box.innerHTML = data.jobs.map(j => `
+    <div class="job">
+      <div class="job-top">
+        <div class="job-title">${j.title || j.url}</div>
+        <span class="badge ${badge(j.status)}">${j.status}</span>
+      </div>
+      ${j.status === '다운로드 중' ? `<div class="bar"><div class="bar-fill" style="width:${j.progress}%"></div></div>` : ''}
+      ${j.error ? `<div class="err">⚠️ ${j.error}</div>` : ''}
+      ${j.status === '완료' && j.filename ? `<div class="err" style="color:#2e7d32">💾 ${j.filename}</div>` : ''}
+    </div>`).join('');
+}
+
+setInterval(refresh, 1000);
+refresh();
+</script>
+</body>
+</html>
