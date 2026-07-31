@@ -61,9 +61,8 @@ def unique_path(date_str, title):
     return path
 
 
-def download_one(job_id, url):
-    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    common_opts = {
+def build_opts(impersonate):
+    opts = {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
@@ -71,51 +70,69 @@ def download_one(job_id, url):
         "retries": RETRIES,
         "fragment_retries": RETRIES,
     }
+    if impersonate:
+        # 틱톡·도우인·샤오홍슈 등은 봇을 차단해서, 진짜 브라우저인 척해야 받아진다
+        from yt_dlp.networking.impersonate import ImpersonateTarget
+        opts["impersonate"] = ImpersonateTarget.from_str("chrome")
+    return opts
+
+
+def download_one(job_id, url):
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        set_job(job_id, status="정보 확인 중")
-        with yt_dlp.YoutubeDL(common_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-
-        title = info.get("title") or url
-        upload_date = info.get("upload_date")  # "20260731" 형태
-        if upload_date:
-            date_str = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
-        else:
-            date_str = datetime.now().strftime("%Y-%m-%d")
-        out_path = unique_path(date_str, title)
-        set_job(job_id, title=title, filename=out_path.name)
-
-        def progress_hook(d):
-            if d["status"] == "downloading":
-                total = d.get("total_bytes") or d.get("total_bytes_estimate")
-                if total:
-                    pct = round(d.get("downloaded_bytes", 0) / total * 100)
-                    set_job(job_id, status="다운로드 중", progress=min(pct, 100))
-            elif d["status"] == "finished":
-                set_job(job_id, status="합치는 중", progress=100)
-
-        dl_opts = {
-            **common_opts,
-            # 원본 최고 화질: 최고 영상 + 최고 소리를 받아서 mp4로 합침
-            "format": "bv*+ba/b",
-            "merge_output_format": "mp4",
-            "outtmpl": str(out_path.with_suffix("")) + ".%(ext)s",
-            "progress_hooks": [progress_hook],
-        }
-        set_job(job_id, status="다운로드 중")
-        with yt_dlp.YoutubeDL(dl_opts) as ydl:
-            ydl.extract_info(url, download=True)
-
-        # 합친 결과가 mp4가 아닌 경우(사이트에 따라 webm 등)를 대비해 실제 파일을 찾는다
-        if not out_path.exists():
-            candidates = list(DOWNLOAD_DIR.glob(out_path.stem + ".*"))
-            if candidates:
-                out_path = candidates[0]
-            else:
-                raise RuntimeError("다운로드는 끝났는데 파일을 찾지 못했어요.")
-        set_job(job_id, status="완료", progress=100, filename=out_path.name)
+        try:
+            attempt(job_id, url, impersonate=False)
+        except Exception:
+            set_job(job_id, status="다른 방법으로 재시도 중", progress=0)
+            attempt(job_id, url, impersonate=True)
     except Exception as e:
         set_job(job_id, status="실패", error=friendly_error(e))
+
+
+def attempt(job_id, url, impersonate):
+    common_opts = build_opts(impersonate)
+    set_job(job_id, status="정보 확인 중")
+    with yt_dlp.YoutubeDL(common_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    title = info.get("title") or url
+    upload_date = info.get("upload_date")  # "20260731" 형태
+    if upload_date:
+        date_str = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
+    else:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+    out_path = unique_path(date_str, title)
+    set_job(job_id, title=title, filename=out_path.name)
+
+    def progress_hook(d):
+        if d["status"] == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            if total:
+                pct = round(d.get("downloaded_bytes", 0) / total * 100)
+                set_job(job_id, status="다운로드 중", progress=min(pct, 100))
+        elif d["status"] == "finished":
+            set_job(job_id, status="합치는 중", progress=100)
+
+    dl_opts = {
+        **common_opts,
+        # 원본 최고 화질: 최고 영상 + 최고 소리를 받아서 mp4로 합침
+        "format": "bv*+ba/b",
+        "merge_output_format": "mp4",
+        "outtmpl": str(out_path.with_suffix("")) + ".%(ext)s",
+        "progress_hooks": [progress_hook],
+    }
+    set_job(job_id, status="다운로드 중")
+    with yt_dlp.YoutubeDL(dl_opts) as ydl:
+        ydl.extract_info(url, download=True)
+
+    # 합친 결과가 mp4가 아닌 경우(사이트에 따라 webm 등)를 대비해 실제 파일을 찾는다
+    if not out_path.exists():
+        candidates = list(DOWNLOAD_DIR.glob(out_path.stem + ".*"))
+        if candidates:
+            out_path = candidates[0]
+        else:
+            raise RuntimeError("다운로드는 끝났는데 파일을 찾지 못했어요.")
+    set_job(job_id, status="완료", progress=100, filename=out_path.name)
 
 
 @app.route("/")
