@@ -172,8 +172,9 @@ async function refresh() {
       ${j.status === '다운로드 중' ? `<div class="bar"><div class="bar-fill" style="width:${j.progress}%"></div></div>` : ''}
       ${j.error ? `<div class="err">⚠️ ${esc(j.error)}</div>` : ''}
       ${j.status === '완료' && j.filename ? `<div class="err" style="color:#2e7d32">💾 ${esc(j.filename)}</div>` : ''}
-      ${j.status === '완료' && !j.subs && !j.sub_status ? `
-      <div class="subs-btns"><button class="mini" onclick="transcribe('${j.id}')">🎧 소리 듣고 자막 만들기</button></div>` : ''}
+      ${j.status === '완료' && !j.subs && !j.sub_running ? `
+      <div class="subs-btns"><button class="mini" onclick="transcribe('${j.id}')">${
+        j.sub_status ? '🔁 자막 만들기 다시 시도' : '🎧 소리 듣고 자막 만들기'}</button></div>` : ''}
       ${j.sub_status ? `<div class="sub-progress">🎧 ${esc(j.sub_status)}</div>` : ''}
       ${j.subs && j.subs.length ? `
       <details class="subs" data-id="${j.id}">

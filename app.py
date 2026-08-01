@@ -148,6 +148,15 @@ def parse_vtt(text):
     return lines_out
 
 
+def save_subs_file(video_path, subs):
+    """자막을 영상 옆에 .txt로도 남긴다. 프로그램을 껐다 켜도 안 사라지게."""
+    try:
+        txt = "\n".join(f"[{s['t']}] {s['text']}" for s in subs)
+        video_path.with_suffix(".txt").write_text(txt, encoding="utf-8")
+    except Exception:
+        pass  # 저장에 실패해도 화면에는 자막이 보이니까 그냥 넘어간다
+
+
 def fetch_subtitles(info, opts):
     """영상 정보에서 자막을 내려받아 파싱한다. 실패해도 다운로드에는 영향 없음."""
     tracks = pick_sub_track(info)
@@ -338,8 +347,10 @@ def attempt(job_id, url, impersonate_target):
     except Exception:
         subs = None
     if subs:
+        save_subs_file(out_path, subs)
         set_job(job_id, subs=subs, sub_source="영상 자막")
-    set_job(job_id, status="완료", progress=100, filename=out_path.name)
+    set_job(job_id, status="완료", progress=100,
+            filename=out_path.name, path=str(out_path))
 
 
 @app.route("/")
@@ -361,8 +372,9 @@ def api_download():
         job_id = uuid.uuid4().hex[:8]
         with lock:
             jobs[job_id] = {"id": job_id, "url": url, "title": None, "status": "대기 중",
-                            "progress": 0, "error": None, "filename": None,
-                            "subs": None, "sub_source": None, "sub_status": None}
+                            "progress": 0, "error": None, "filename": None, "path": None,
+                            "subs": None, "sub_source": None, "sub_status": None,
+                            "sub_running": False}
             jobs_order.append(job_id)
         executor.submit(download_one, job_id, url)
     return jsonify({"count": len(urls)})
@@ -406,6 +418,8 @@ def api_choose_folder():
 
 _whisper_model = None
 _whisper_lock = threading.Lock()
+# 음성인식은 CPU를 전부 쓴다. 여러 개를 동시에 돌리면 서로 느려지기만 하므로 한 번에 하나씩.
+whisper_executor = ThreadPoolExecutor(max_workers=1)
 
 
 def get_whisper():
@@ -434,11 +448,15 @@ def transcribe_job(job_id, video_path):
                 lines.append({"t": stamp, "text": text})
                 set_job(job_id, sub_status=f"소리 듣는 중... {len(lines)}줄")
         if lines:
+            save_subs_file(video_path, lines)
             set_job(job_id, subs=lines, sub_source="음성인식", sub_status=None)
         else:
-            set_job(job_id, sub_status="말소리를 찾지 못했어요 (음악만 있는 영상일 수 있어요)")
+            set_job(job_id, sub_status="말소리를 찾지 못했어요 (음악만 있는 영상일 수 있어요). 다시 시도할 수 있어요.")
     except Exception as e:
-        set_job(job_id, sub_status=f"음성 인식 실패: {str(e)[:80]}")
+        set_job(job_id, sub_status=f"음성 인식에 실패했어요 ({str(e)[:60]}). 다시 눌러보세요.")
+    finally:
+        # 무슨 일이 있어도 다시 시도할 수 있게 풀어준다
+        set_job(job_id, sub_running=False)
 
 
 @app.route("/api/transcribe", methods=["POST"])
@@ -448,13 +466,15 @@ def api_transcribe():
         job = jobs.get(job_id)
     if not job or not job.get("filename"):
         return jsonify({"error": "먼저 영상을 받아야 해요."}), 400
-    path = get_download_dir() / job["filename"]
+    # 받을 때 저장해둔 실제 경로를 쓴다. 저장 위치를 바꿔도 옛날 작업이 안 깨지게.
+    path = Path(job["path"]) if job.get("path") else get_download_dir() / job["filename"]
     if not path.exists():
-        return jsonify({"error": "영상 파일을 찾지 못했어요. 저장 폴더를 옮기셨나요?"}), 400
-    if job.get("sub_status"):
-        return jsonify({"ok": True})  # 이미 돌아가는 중
-    set_job(job_id, sub_status="대기 중")
-    threading.Thread(target=transcribe_job, args=(job_id, path), daemon=True).start()
+        return jsonify({"error": "영상 파일을 찾지 못했어요. 파일을 옮기거나 지우셨나요?"}), 400
+    with lock:  # 확인과 표시를 한 번에 (버튼 두 번 눌러도 두 번 안 돌게)
+        if jobs[job_id].get("sub_running"):
+            return jsonify({"ok": True})
+        jobs[job_id].update(sub_running=True, sub_status="대기 중")
+    whisper_executor.submit(transcribe_job, job_id, path)
     return jsonify({"ok": True})
 
 
