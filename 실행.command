@@ -16,6 +16,12 @@ git pull --quiet 2>/dev/null
 pip install --quiet -r requirements.txt 2>/dev/null
 pip install --quiet --upgrade yt-dlp curl-cffi 2>/dev/null
 
+# 아이콘 앱이 없거나 소스가 더 새것이면 다시 만든다
+if [ ! -d "영상 다운로더.app" ] || [ tools/앱소스.applescript -nt "영상 다운로더.app" ]; then
+  echo "🎨 실행 아이콘을 만드는 중..."
+  bash tools/앱만들기.sh > /dev/null 2>&1
+fi
+
 # 2초 후 기본 브라우저로 화면 열기
 (sleep 2 && open "http://127.0.0.1:5002") &
 

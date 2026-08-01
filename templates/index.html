@@ -28,6 +28,12 @@
   .primary:hover { background: #3a5ae0; }
   .ghost { background: #e8eaf0; color: #333; }
   .ghost:hover { background: #dde0e8; }
+  .danger { margin-left: auto; color: #b3261e; }
+  .danger:hover { background: #ffe3e0; }
+  .bye {
+    display: none; text-align: center; padding: 50px 20px;
+    font-size: 16px; color: #555; line-height: 1.8;
+  }
   .summary { font-size: 13px; color: #666; margin-bottom: 10px; }
   .job {
     background: #fff; border-radius: 10px; padding: 14px 16px;
@@ -79,11 +85,12 @@
   <p class="sub">유튜브 · 인스타그램 · 틱톡 · 도우인 · 샤오홍슈 — 원본 최고 화질로 받아요</p>
 
   <textarea id="urls" placeholder="영상 주소를 붙여넣으세요. 여러 개면 한 줄에 하나씩!&#10;https://www.youtube.com/watch?v=...&#10;https://www.tiktok.com/@.../video/..."></textarea>
-  <div class="btns">
+  <div class="btns" id="btns">
     <button class="primary" onclick="startDownload()">⬇️ 다운로드 시작</button>
     <button class="ghost" onclick="openFolder()">📂 저장 폴더 열기</button>
     <button class="ghost" onclick="chooseFolder()">📁 저장 위치 바꾸기</button>
     <button class="ghost" onclick="clearDone()">🧹 끝난 항목 지우기</button>
+    <button class="ghost danger" onclick="quitApp()">🔴 프로그램 끄기</button>
   </div>
 
   <div class="offline" id="offline">
@@ -94,6 +101,12 @@
 
   <div class="summary" id="summary"></div>
   <div id="jobs"><div class="empty">아직 받은 영상이 없어요</div></div>
+
+  <div class="bye" id="bye">
+    👋 프로그램을 껐어요.<br>
+    다시 쓰려면 <b>영상 다운로더</b> 아이콘을 더블클릭하세요.<br>
+    이 창은 닫으셔도 돼요.
+  </div>
 </div>
 
 <script>
@@ -149,6 +162,26 @@ async function transcribe(id) {
   refresh();
 }
 
+let quitting = false;
+
+async function quitApp() {
+  const busy = Object.values(jobsById).filter(
+    j => j.status !== '완료' && j.status !== '실패').length;
+  const msg = busy
+    ? `아직 ${busy}개가 진행 중이에요. 지금 끄면 받다 만 것은 사라져요.\n그래도 끌까요?`
+    : '프로그램을 끌까요?';
+  if (!confirm(msg)) return;
+
+  quitting = true;
+  try { await fetch('/api/quit', {method: 'POST'}); } catch (e) {}
+  document.querySelector('.btns').style.display = 'none';
+  document.getElementById('jobs').style.display = 'none';
+  document.getElementById('summary').style.display = 'none';
+  document.getElementById('urls').style.display = 'none';
+  document.getElementById('offline').style.display = 'none';
+  document.getElementById('bye').style.display = 'block';
+}
+
 async function makeEditCopy(id) {
   const res = await fetch('/api/make-edit-copy', {
     method: 'POST',
@@ -171,6 +204,7 @@ let failCount = 0;
 let lastHtml = '';
 
 async function refresh() {
+  if (quitting) return;  // 내가 끈 거니까 '꺼진 것 같아요' 안내는 띄우지 않는다
   let data;
   try {
     const res = await fetch('/api/status');

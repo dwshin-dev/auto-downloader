@@ -20,10 +20,16 @@ pip install --quiet -r requirements.txt
 echo "🎞  영상 합치기 도구(ffmpeg)를 준비하는 중..."
 python -c "from static_ffmpeg import run; run.get_or_fetch_platform_executables_else_raise()"
 
+echo "🎨 실행 아이콘을 만드는 중..."
+bash tools/앱만들기.sh > /dev/null 2>&1
+
 echo ""
 echo "🔍 설치가 잘 됐는지 점검하는 중..."
-if python -c "import flask, yt_dlp, curl_cffi, static_ffmpeg, faster_whisper" 2>/dev/null; then
-  echo "✅ 설치 완료! 이제 '실행.command'를 더블클릭하면 됩니다."
+if python -c "import flask, yt_dlp, curl_cffi, static_ffmpeg, faster_whisper" 2>/dev/null \
+   && [ -d "영상 다운로더.app" ]; then
+  echo "✅ 설치 완료!"
+  echo "   이제 이 폴더의 '영상 다운로더' 아이콘을 더블클릭하면 됩니다."
+  echo "   (독에 두고 쓰려면 아이콘을 화면 아래 독으로 끌어다 놓으세요)"
 else
   echo "❌ 설치가 완전히 끝나지 않았어요."
   echo "   와이파이(인터넷) 연결을 확인한 다음, 이 파일을 다시 더블클릭해주세요."

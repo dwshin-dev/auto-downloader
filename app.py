@@ -1,6 +1,8 @@
 import glob as globlib
 import json
+import os
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -622,6 +624,23 @@ def api_make_edit_copy():
     return jsonify({"ok": True})
 
 
+@app.route("/api/quit", methods=["POST"])
+def api_quit():
+    """화면의 '프로그램 끄기' 버튼. 잠시 뒤 서버를 끈다(응답은 먼저 보낸다)."""
+    def shutdown():
+        time.sleep(0.5)
+        # 앱 아이콘으로 켰으면 독의 아이콘도 같이 없앤다
+        pid = os.environ.get("WATCH_APP_PID")
+        if pid and pid.isdigit():
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except OSError:
+                pass
+        os._exit(0)
+    threading.Thread(target=shutdown, daemon=True).start()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/clear-done", methods=["POST"])
 def api_clear_done():
     with lock:
@@ -632,6 +651,28 @@ def api_clear_done():
     return jsonify({"ok": True})
 
 
+def watch_parent_app():
+    """앱 아이콘으로 켰을 때, 앱이 사라지면(독에서 종료 등) 서버도 같이 끈다.
+
+    앱 종료 순간에 AppleScript가 서버를 죽이려 하면 교착이 생기므로,
+    반대로 서버가 앱을 지켜보는 방식으로 만든다.
+    """
+    pid = os.environ.get("WATCH_APP_PID")
+    if not pid or not pid.isdigit():
+        return
+
+    def loop():
+        while True:
+            time.sleep(3)
+            try:
+                os.kill(int(pid), 0)
+            except OSError:
+                os._exit(0)
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
 if __name__ == "__main__":
+    watch_parent_app()
     print(f"영상 소스 다운로더 실행: http://127.0.0.1:{PORT}")
     app.run(host="127.0.0.1", port=PORT, threaded=True)
