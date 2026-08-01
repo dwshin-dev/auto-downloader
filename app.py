@@ -1,3 +1,4 @@
+import glob as globlib
 import json
 import re
 import subprocess
@@ -52,15 +53,18 @@ def friendly_error(err):
     """yt-dlp 에러를 친구가 읽을 수 있는 한국어로 바꾼다."""
     msg = str(err)
     low = msg.lower()
-    if "rehydration" in low or "webpage video data" in low:
+    # 봇 차단 문구가 "로그인하세요"처럼 보여도 실제로는 잠깐 막힌 것뿐이라 여기서 먼저 걸러낸다
+    if ("rehydration" in low or "webpage video data" in low
+            or "not a bot" in low or "captcha" in low):
         return "사이트가 잠깐 차단했어요(로봇인지 확인 중). 같은 주소를 한 번 더 넣으면 되는 경우가 많아요. 계속 안 되면 몇 분 뒤에 다시 해보세요."
     if "unsupported url" in low:
         return "지원하지 않는 주소예요. URL을 복사할 때 잘린 게 아닌지 확인해주세요."
-    if "private" in low or "login" in low or "cookies" in low or "sign in" in low:
+    if "is private" in low or "private video" in low or "members-only" in low:
         return "로그인해야 볼 수 있는 비공개 영상이라 받을 수 없어요."
-    if "unavailable" in low or "404" in low or "not exist" in low or "removed" in low:
+    if ("video unavailable" in low or "has been removed" in low
+            or "does not exist" in low or "no longer available" in low):
         return "삭제됐거나 존재하지 않는 영상이에요."
-    if "geo" in low or "country" in low or "region" in low:
+    if "geo-restricted" in low or "in your country" in low or "your location" in low:
         return "지역 제한이 걸린 영상이라 한국에서는 받을 수 없어요."
     if "urlopen" in low or "timed out" in low or "connection" in low or "network" in low:
         return "인터넷 연결에 문제가 있어요. 잠시 후 다시 시도해주세요."
@@ -69,7 +73,8 @@ def friendly_error(err):
 
 def set_job(job_id, **fields):
     with lock:
-        jobs[job_id].update(fields)
+        if job_id in jobs:  # '끝난 항목 지우기'로 이미 사라졌을 수 있다
+            jobs[job_id].update(fields)
 
 
 def unique_path(date_str, title):
@@ -187,6 +192,7 @@ def download_via_fallback(job_id, url, out_path):
         raise RuntimeError("영상 주소를 찾지 못했어요.")
     set_job(job_id, status="다운로드 중", progress=0)
     resp = requests.get(video_url, impersonate="chrome", timeout=60, stream=True)
+    resp.raise_for_status()  # 에러 페이지(HTML)를 영상인 척 저장하는 걸 막는다
     total = int(resp.headers.get("Content-Length") or 0)
     done = 0
     tmp = out_path.with_suffix(".part")
@@ -196,20 +202,54 @@ def download_via_fallback(job_id, url, out_path):
             done += len(chunk)
             if total:
                 set_job(job_id, progress=min(round(done / total * 100), 100))
+
+    # 중간에 끊긴 파일을 '완료'로 속이지 않는다 (편집하다가 알면 늦다).
+    # 예외를 던지면 바깥 재시도 사다리가 알아서 다시 받는다.
+    if total and done != total:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError("파일을 받다가 중간에 끊겼어요.")
+    if done < 100_000:  # 영상이라기엔 너무 작다 = 에러 페이지일 가능성
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError("영상 파일을 제대로 받지 못했어요.")
     tmp.rename(out_path)
 
 
 def is_permanent_error(err):
-    """재시도해도 소용없는 에러 (삭제됨, 비공개, 지원 안 함 등)"""
+    """재시도해도 소용없는 에러 (삭제됨, 비공개, 지원 안 함 등)
+
+    주의: 유튜브 봇 차단 문구가 "Sign in to confirm you're not a bot"이라서
+    'sign in' 같은 짧은 조각으로 판단하면 멀쩡한 공개 영상을 비공개로 오해한다.
+    애매하면 재시도하는 쪽이 낫다 — 헛재시도는 30초 낭비지만, 헛포기는 거짓말이다.
+    """
     low = str(err).lower()
+    if "not a bot" in low or "captcha" in low or "rehydration" in low:
+        return False
     return any(k in low for k in (
-        "unsupported url", "private", "unavailable", "404",
-        "not exist", "removed", "login", "sign in", "cookies",
+        "unsupported url", "is private", "private video", "members-only",
+        "video unavailable", "has been removed", "does not exist",
+        "no longer available", "account has been terminated",
     ))
 
 
 def download_one(job_id, url):
-    get_download_dir().mkdir(parents=True, exist_ok=True)
+    # 여기서 예외가 새어나가면 작업이 영원히 '대기 중'에 멈춘 채로 아무도 모른다
+    try:
+        _download_one(job_id, url)
+    except Exception as e:
+        set_job(job_id, status="실패", error=friendly_error(e))
+
+
+def _download_one(job_id, url):
+    dest = get_download_dir()
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        set_job(job_id, status="실패", error=(
+            f"저장 폴더를 열 수 없어요: {dest}\n"
+            "외장하드가 빠졌거나 폴더가 사라진 것 같아요. "
+            "'📁 저장 위치 바꾸기'로 폴더를 다시 골라주세요."))
+        return
+
     # 봇 차단은 간헐적이라 재시도 자체가 효과가 있고, 브라우저 종류를 바꾸면 뚫리기도 한다
     if HAS_IMPERSONATE:
         if any(site in url for site in BOT_BLOCKING_SITES):
@@ -280,11 +320,15 @@ def attempt(job_id, url, impersonate_target):
         set_job(job_id, status="영상 찾는 중")
         download_via_fallback(job_id, url, out_path)
 
-    # 합친 결과가 mp4가 아닌 경우(사이트에 따라 webm 등)를 대비해 실제 파일을 찾는다
+    # 합친 결과가 mp4가 아닌 경우(사이트에 따라 webm 등)를 대비해 실제 파일을 찾는다.
+    # 제목에 [4K] 같은 대괄호가 있으면 glob이 특수문자로 읽어버리니 escape 필수.
+    # yt-dlp 중간 파일(name.f137.mp4)이 아니라 진짜 결과물을 골라야 한다.
     if not out_path.exists():
-        candidates = list(out_path.parent.glob(out_path.stem + ".*"))
+        candidates = [p for p in out_path.parent.glob(globlib.escape(out_path.stem) + ".*")
+                      if p.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov")
+                      and not re.search(r"\.f\d+$", p.stem)]
         if candidates:
-            out_path = candidates[0]
+            out_path = max(candidates, key=lambda p: p.stat().st_size)
         else:
             raise RuntimeError("다운로드는 끝났는데 파일을 찾지 못했어요.")
 
@@ -334,8 +378,13 @@ def api_status():
 @app.route("/api/open-folder", methods=["POST"])
 def api_open_folder():
     dest = get_download_dir()
-    dest.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["open", str(dest)])
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["open", str(dest)], check=True)
+    except Exception:
+        return jsonify({"error": f"저장 폴더를 열 수 없어요: {dest}\n"
+                                 "외장하드가 빠졌거나 폴더가 사라진 것 같아요. "
+                                 "'📁 저장 위치 바꾸기'로 다시 골라주세요."}), 400
     return jsonify({"ok": True})
 
 

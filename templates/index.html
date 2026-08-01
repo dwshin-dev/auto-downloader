@@ -95,7 +95,10 @@ async function startDownload() {
   else alert(data.error || '문제가 생겼어요.');
 }
 
-async function openFolder() { await fetch('/api/open-folder', {method: 'POST'}); }
+async function openFolder() {
+  const res = await fetch('/api/open-folder', {method: 'POST'});
+  if (!res.ok) alert((await res.json()).error || '폴더를 열 수 없어요.');
+}
 async function clearDone() { await fetch('/api/clear-done', {method: 'POST'}); refresh(); }
 async function chooseFolder() {
   // 폴더 선택창이 다른 창 뒤에 뜰 수 있어요
