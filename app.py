@@ -30,8 +30,8 @@ def get_download_dir():
 app = Flask(__name__)
 
 # venv 안에 내장된 ffmpeg 사용 (친구 컴퓨터에 ffmpeg 설치 안 해도 됨)
-_ffmpeg_path, _ = static_ffmpeg_run.get_or_fetch_platform_executables_else_raise()
-FFMPEG_DIR = str(Path(_ffmpeg_path).parent)
+FFMPEG, FFPROBE = static_ffmpeg_run.get_or_fetch_platform_executables_else_raise()
+FFMPEG_DIR = str(Path(FFMPEG).parent)
 
 # 브라우저 흉내(impersonate)에 필요한 부품이 있는지 확인
 try:
@@ -174,6 +174,50 @@ def has_video_track(info):
     """영상 트랙이 있는지 확인. 틱톡샵 연결 영상은 소리만 나오는 경우가 있다."""
     fmts = info.get("formats") or [info]
     return any(f.get("vcodec") not in (None, "none") for f in fmts)
+
+
+def _frac(s):
+    """'98100/4049' 같은 분수 문자열을 숫자로. 못 읽으면 0."""
+    try:
+        if "/" in str(s):
+            a, b = str(s).split("/")
+            return float(a) / float(b) if float(b) else 0.0
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def probe_media(path):
+    """ffprobe로 영상 정보를 읽는다. 메타데이터만 보므로 파일이 커도 순식간이다."""
+    try:
+        result = subprocess.run(
+            [FFPROBE, "-v", "error", "-show_entries",
+             "stream=index,codec_type,codec_name,r_frame_rate,avg_frame_rate",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=20)
+        return json.loads(result.stdout) if result.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def vfr_target_fps(probe):
+    """가변 프레임이면 목표 속도(정수)를, 아니면 None을 준다.
+
+    캡컷은 타임라인이 고정 프레임을 가정해서, 가변 프레임 영상은 미리보기는 맞는데
+    내보내면 소리가 밀린다. r_frame_rate(가장 빠른 구간)와 avg_frame_rate(평균)가
+    많이 다르면 가변으로 본다.
+    """
+    if not probe:
+        return None
+    v = next((s for s in (probe.get("streams") or [])
+              if s.get("codec_type") == "video"), None)
+    if not v:
+        return None
+    r, avg = _frac(v.get("r_frame_rate")), _frac(v.get("avg_frame_rate"))
+    if avg <= 0 or r <= 0 or abs(r - avg) / avg <= 0.02:
+        return None
+    # 평균값을 쓰면 실제 프레임이 버려진다. 가장 빠른 구간을 담을 수 있는 값으로.
+    return 60 if avg > 45 else 30
 
 
 def tiktok_mp4_fallback(url):
@@ -349,7 +393,13 @@ def attempt(job_id, url, impersonate_target):
     if subs:
         save_subs_file(out_path, subs)
         set_job(job_id, subs=subs, sub_source="영상 자막")
-    set_job(job_id, status="완료", progress=100,
+
+    # 가변 프레임이면 알려준다 (캡컷에서 소리가 밀리는 원인). 실패해도 다운로드엔 영향 없음
+    try:
+        edit_fps = vfr_target_fps(probe_media(out_path))
+    except Exception:
+        edit_fps = None
+    set_job(job_id, status="완료", progress=100, edit_fps=edit_fps,
             filename=out_path.name, path=str(out_path))
 
 
@@ -374,7 +424,8 @@ def api_download():
             jobs[job_id] = {"id": job_id, "url": url, "title": None, "status": "대기 중",
                             "progress": 0, "error": None, "filename": None, "path": None,
                             "subs": None, "sub_source": None, "sub_status": None,
-                            "sub_running": False}
+                            "sub_running": False, "edit_fps": None,
+                            "edit_status": None, "edit_running": False, "edit_file": None}
             jobs_order.append(job_id)
         executor.submit(download_one, job_id, url)
     return jsonify({"count": len(urls)})
@@ -475,6 +526,99 @@ def api_transcribe():
             return jsonify({"ok": True})
         jobs[job_id].update(sub_running=True, sub_status="대기 중")
     whisper_executor.submit(transcribe_job, job_id, path)
+    return jsonify({"ok": True})
+
+
+edit_executor = ThreadPoolExecutor(max_workers=1)  # 변환도 CPU를 많이 쓰니 하나씩
+
+
+def edit_copy_path(src):
+    path = src.with_name(src.stem + "_편집용.mp4")
+    n = 2
+    while path.exists():
+        path = src.with_name(f"{src.stem}_편집용 ({n}).mp4")
+        n += 1
+    return path
+
+
+def make_edit_copy_job(job_id, src, fps):
+    dst = edit_copy_path(src)
+    tmp = dst.with_suffix(".part.mp4")
+    try:
+        probe = probe_media(src)
+        duration = 0.0
+        try:
+            result = subprocess.run(
+                [FFPROBE, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=nw=1:nk=1", str(src)],
+                capture_output=True, text=True, timeout=20)
+            duration = float(result.stdout.strip() or 0)
+        except Exception:
+            pass
+
+        cmd = [
+            FFMPEG, "-y", "-hide_banner", "-loglevel", "error", "-nostats",
+            "-progress", "pipe:1", "-i", str(src),
+            # 스트림 번호를 가정하면 안 된다 — 틱톡샵 우회로 받은 파일은 소리가 0번이다
+            "-map", "0:v:0", "-map", "0:a:0?",
+            "-vf", f"fps={fps}", "-fps_mode", "cfr",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-af", "aresample=async=1:first_pts=0",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+            "-movflags", "+faststart", str(tmp),
+        ]
+        set_job(job_id, edit_status="편집용 파일 만드는 중... 0%")
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for line in proc.stdout:
+            if line.startswith("out_time_us=") and duration > 0:
+                try:
+                    pct = round(int(line.split("=")[1]) / 1_000_000 / duration * 100)
+                    set_job(job_id, edit_status=f"편집용 파일 만드는 중... {min(pct, 100)}%")
+                except Exception:
+                    pass
+        stderr = proc.stderr.read()
+        proc.wait()
+        if proc.returncode != 0 or not tmp.exists():
+            raise RuntimeError(stderr[-200:] or "변환 실패")
+
+        # 진짜 고정 프레임이 됐는지 확인하고 넘긴다 (아니면 준 의미가 없다)
+        check = probe_media(tmp)
+        cv = next((s for s in (check.get("streams") or [])
+                   if s.get("codec_type") == "video"), {}) if check else {}
+        if cv.get("r_frame_rate") != cv.get("avg_frame_rate"):
+            raise RuntimeError("고정 프레임으로 안 바뀜")
+
+        tmp.rename(dst)
+        set_job(job_id, edit_status=None, edit_file=dst.name)
+    except Exception as e:
+        tmp.unlink(missing_ok=True)
+        msg = str(e).lower()
+        if "no space" in msg or "space left" in msg:
+            set_job(job_id, edit_status="저장 공간이 부족한 것 같아요. 공간을 확보하고 다시 눌러주세요.")
+        else:
+            set_job(job_id, edit_status="편집용 파일을 만들다가 문제가 생겼어요. 한 번 더 눌러보세요.")
+    finally:
+        set_job(job_id, edit_running=False)
+
+
+@app.route("/api/make-edit-copy", methods=["POST"])
+def api_make_edit_copy():
+    job_id = (request.json or {}).get("job_id")
+    with lock:
+        job = jobs.get(job_id)
+    if not job or not job.get("path"):
+        return jsonify({"error": "먼저 영상을 받아야 해요."}), 400
+    src = Path(job["path"])
+    if not src.exists():
+        return jsonify({"error": "영상 파일을 찾지 못했어요. 파일을 옮기거나 지우셨나요?"}), 400
+    fps = job.get("edit_fps")
+    if not fps:
+        return jsonify({"error": "이 영상은 편집용 파일을 만들 필요가 없어요."}), 400
+    with lock:
+        if jobs[job_id].get("edit_running"):
+            return jsonify({"ok": True})
+        jobs[job_id].update(edit_running=True, edit_status="대기 중")
+    edit_executor.submit(make_edit_copy_job, job_id, src, fps)
     return jsonify({"ok": True})
 
 

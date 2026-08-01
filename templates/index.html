@@ -62,6 +62,11 @@
   .sub-line .ts { display: inline-block; min-width: 42px; color: #999;
                   font-variant-numeric: tabular-nums; margin-right: 6px; }
   .sub-progress { margin-top: 8px; font-size: 13px; color: #1565c0; }
+  .warn {
+    background: #fff8e1; color: #7a5d00; border-left: 3px solid #f0b400;
+    padding: 8px 10px; border-radius: 6px; margin-top: 8px; font-size: 13px; line-height: 1.5;
+  }
+  .hint { font-size: 12px; color: #888; margin-top: 4px; }
   .offline {
     display: none; background: #fff3e0; color: #8a5100; border: 1px solid #ffcc80;
     border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.6;
@@ -144,6 +149,16 @@ async function transcribe(id) {
   refresh();
 }
 
+async function makeEditCopy(id) {
+  const res = await fetch('/api/make-edit-copy', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({job_id: id})
+  });
+  if (!res.ok) alert((await res.json()).error || '문제가 생겼어요.');
+  refresh();
+}
+
 async function copySubs(id, withTime) {
   const j = jobsById[id];
   if (!j || !j.subs) return;
@@ -193,6 +208,13 @@ async function refresh() {
       ${j.status === '다운로드 중' ? `<div class="bar"><div class="bar-fill" style="width:${j.progress}%"></div></div>` : ''}
       ${j.error ? `<div class="err">⚠️ ${esc(j.error)}</div>` : ''}
       ${j.status === '완료' && j.filename ? `<div class="err" style="color:#2e7d32">💾 ${esc(j.filename)}</div>` : ''}
+      ${j.edit_fps && !j.edit_file ? `
+      <div class="warn">⚠️ 이 영상은 편집 프로그램에 넣으면 뒤로 갈수록 소리가 조금씩 밀릴 수 있어요.</div>
+      ${!j.edit_running ? `
+      <div class="subs-btns"><button class="mini" onclick="makeEditCopy('${j.id}')">🛠️ 편집용 파일 만들기</button></div>
+      <div class="hint">영상과 소리가 딱 맞는 파일을 하나 더 만들어줘요. 원본은 그대로 있어요.</div>` : ''}` : ''}
+      ${j.edit_status ? `<div class="sub-progress">🛠️ ${esc(j.edit_status)}</div>` : ''}
+      ${j.edit_file ? `<div class="err" style="color:#2e7d32">✅ 편집용 파일도 만들었어요 — ${esc(j.edit_file)}</div>` : ''}
       ${j.status === '완료' && !j.subs && !j.sub_running ? `
       <div class="subs-btns"><button class="mini" onclick="transcribe('${j.id}')">${
         j.sub_status ? '🔁 자막 만들기 다시 시도' : '🎧 소리 듣고 자막 만들기'}</button></div>` : ''}
