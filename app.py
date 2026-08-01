@@ -1,3 +1,4 @@
+import json
 import subprocess
 import threading
 import time
@@ -12,9 +13,17 @@ from static_ffmpeg import run as static_ffmpeg_run
 from yt_dlp.utils import sanitize_filename
 
 PORT = 5002
-DOWNLOAD_DIR = Path.home() / "Downloads" / "영상소스"
+DEFAULT_DOWNLOAD_DIR = Path.home() / "Downloads" / "영상소스"
+SETTINGS_FILE = Path(__file__).parent / "settings.json"  # 개인 설정이라 git에 안 올라감
 MAX_PARALLEL = 3  # 사이트 차단 방지를 위해 동시에 3개까지만
 RETRIES = 3
+
+
+def get_download_dir():
+    try:
+        return Path(json.loads(SETTINGS_FILE.read_text())["download_dir"])
+    except Exception:
+        return DEFAULT_DOWNLOAD_DIR
 
 app = Flask(__name__)
 
@@ -66,10 +75,11 @@ def unique_path(date_str, title):
     """날짜_제목.mp4 형태로, 이미 있으면 (2), (3)... 을 붙인다."""
     safe_title = sanitize_filename(title, restricted=False)[:80].strip() or "제목없음"
     base = f"{date_str}_{safe_title}"
-    path = DOWNLOAD_DIR / f"{base}.mp4"
+    dest = get_download_dir()
+    path = dest / f"{base}.mp4"
     n = 2
     while path.exists():
-        path = DOWNLOAD_DIR / f"{base} ({n}).mp4"
+        path = dest / f"{base} ({n}).mp4"
         n += 1
     return path
 
@@ -100,7 +110,7 @@ def is_permanent_error(err):
 
 
 def download_one(job_id, url):
-    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    get_download_dir().mkdir(parents=True, exist_ok=True)
     # 봇 차단은 간헐적이라 재시도 자체가 효과가 있고, 브라우저 종류를 바꾸면 뚫리기도 한다
     if HAS_IMPERSONATE:
         if any(site in url for site in BOT_BLOCKING_SITES):
@@ -168,7 +178,7 @@ def attempt(job_id, url, impersonate_target):
 
     # 합친 결과가 mp4가 아닌 경우(사이트에 따라 webm 등)를 대비해 실제 파일을 찾는다
     if not out_path.exists():
-        candidates = list(DOWNLOAD_DIR.glob(out_path.stem + ".*"))
+        candidates = list(out_path.parent.glob(out_path.stem + ".*"))
         if candidates:
             out_path = candidates[0]
         else:
@@ -205,14 +215,31 @@ def api_download():
 def api_status():
     with lock:
         job_list = [jobs[j] for j in jobs_order]
-    return jsonify({"jobs": job_list, "download_dir": str(DOWNLOAD_DIR)})
+    return jsonify({"jobs": job_list, "download_dir": str(get_download_dir())})
 
 
 @app.route("/api/open-folder", methods=["POST"])
 def api_open_folder():
-    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["open", str(DOWNLOAD_DIR)])
+    dest = get_download_dir()
+    dest.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["open", str(dest)])
     return jsonify({"ok": True})
+
+
+@app.route("/api/choose-folder", methods=["POST"])
+def api_choose_folder():
+    """맥 기본 폴더 선택창을 띄워서 저장 위치를 바꾼다."""
+    script = 'POSIX path of (choose folder with prompt "영상을 저장할 폴더를 고르세요")'
+    try:
+        result = subprocess.run(["osascript", "-e", script],
+                                capture_output=True, text=True, timeout=180)
+        chosen = result.stdout.strip()
+        if result.returncode == 0 and chosen:
+            SETTINGS_FILE.write_text(
+                json.dumps({"download_dir": chosen.rstrip("/")}, ensure_ascii=False))
+    except subprocess.TimeoutExpired:
+        pass  # 선택창을 오래 안 닫으면 그냥 기존 설정 유지
+    return jsonify({"download_dir": str(get_download_dir())})
 
 
 @app.route("/api/clear-done", methods=["POST"])

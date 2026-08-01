@@ -61,6 +61,7 @@
   <div class="btns">
     <button class="primary" onclick="startDownload()">⬇️ 다운로드 시작</button>
     <button class="ghost" onclick="openFolder()">📂 저장 폴더 열기</button>
+    <button class="ghost" onclick="chooseFolder()">📁 저장 위치 바꾸기</button>
     <button class="ghost" onclick="clearDone()">🧹 끝난 항목 지우기</button>
   </div>
 
@@ -84,6 +85,13 @@ async function startDownload() {
 
 async function openFolder() { await fetch('/api/open-folder', {method: 'POST'}); }
 async function clearDone() { await fetch('/api/clear-done', {method: 'POST'}); refresh(); }
+async function chooseFolder() {
+  // 폴더 선택창이 다른 창 뒤에 뜰 수 있어요
+  const res = await fetch('/api/choose-folder', {method: 'POST'});
+  const data = await res.json();
+  refresh();
+  alert('이제 여기에 저장돼요:\n' + data.download_dir);
+}
 
 function badge(status) {
   if (status === '완료') return 'b-done';
