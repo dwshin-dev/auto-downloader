@@ -21,5 +21,12 @@ echo "🎞  영상 합치기 도구(ffmpeg)를 준비하는 중..."
 python -c "from static_ffmpeg import run; run.get_or_fetch_platform_executables_else_raise()"
 
 echo ""
-echo "✅ 설치 완료! 이제 '실행.command'를 더블클릭하면 됩니다."
+echo "🔍 설치가 잘 됐는지 점검하는 중..."
+if python -c "import flask, yt_dlp, curl_cffi, static_ffmpeg" 2>/dev/null; then
+  echo "✅ 설치 완료! 이제 '실행.command'를 더블클릭하면 됩니다."
+else
+  echo "❌ 설치가 완전히 끝나지 않았어요."
+  echo "   와이파이(인터넷) 연결을 확인한 다음, 이 파일을 다시 더블클릭해주세요."
+  echo "   그래도 안 되면 이 창을 사진 찍어서 보내주세요."
+fi
 read -p "엔터를 누르면 창이 닫힙니다."

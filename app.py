@@ -1,5 +1,6 @@
 import subprocess
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -21,6 +22,16 @@ app = Flask(__name__)
 _ffmpeg_path, _ = static_ffmpeg_run.get_or_fetch_platform_executables_else_raise()
 FFMPEG_DIR = str(Path(_ffmpeg_path).parent)
 
+# 브라우저 흉내(impersonate)에 필요한 부품이 있는지 확인
+try:
+    import curl_cffi  # noqa: F401
+    HAS_IMPERSONATE = True
+except ImportError:
+    HAS_IMPERSONATE = False
+
+# 봇 차단이 심해서 처음부터 브라우저 흉내가 필요한 사이트들
+BOT_BLOCKING_SITES = ("tiktok.com", "douyin.com", "xiaohongshu.com", "xhslink.com", "instagram.com")
+
 jobs = {}  # job_id -> 상태 정보
 jobs_order = []
 lock = threading.Lock()
@@ -31,6 +42,8 @@ def friendly_error(err):
     """yt-dlp 에러를 친구가 읽을 수 있는 한국어로 바꾼다."""
     msg = str(err)
     low = msg.lower()
+    if "rehydration" in low or "webpage video data" in low:
+        return "사이트가 잠깐 차단했어요(로봇인지 확인 중). 같은 주소를 한 번 더 넣으면 되는 경우가 많아요. 계속 안 되면 몇 분 뒤에 다시 해보세요."
     if "unsupported url" in low:
         return "지원하지 않는 주소예요. URL을 복사할 때 잘린 게 아닌지 확인해주세요."
     if "private" in low or "login" in low or "cookies" in low or "sign in" in low:
@@ -61,7 +74,7 @@ def unique_path(date_str, title):
     return path
 
 
-def build_opts(impersonate):
+def build_opts(impersonate_target):
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -70,27 +83,54 @@ def build_opts(impersonate):
         "retries": RETRIES,
         "fragment_retries": RETRIES,
     }
-    if impersonate:
+    if impersonate_target:
         # 틱톡·도우인·샤오홍슈 등은 봇을 차단해서, 진짜 브라우저인 척해야 받아진다
         from yt_dlp.networking.impersonate import ImpersonateTarget
-        opts["impersonate"] = ImpersonateTarget.from_str("chrome")
+        opts["impersonate"] = ImpersonateTarget.from_str(impersonate_target)
     return opts
+
+
+def is_permanent_error(err):
+    """재시도해도 소용없는 에러 (삭제됨, 비공개, 지원 안 함 등)"""
+    low = str(err).lower()
+    return any(k in low for k in (
+        "unsupported url", "private", "unavailable", "404",
+        "not exist", "removed", "login", "sign in", "cookies",
+    ))
 
 
 def download_one(job_id, url):
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    try:
+    # 봇 차단은 간헐적이라 재시도 자체가 효과가 있고, 브라우저 종류를 바꾸면 뚫리기도 한다
+    if HAS_IMPERSONATE:
+        if any(site in url for site in BOT_BLOCKING_SITES):
+            strategies = ["chrome", "chrome", "safari", "chrome", "safari"]
+        else:
+            strategies = [None, "chrome", "safari"]
+    else:
+        strategies = [None]
+
+    last_err = None
+    for i, target in enumerate(strategies):
+        if i:
+            set_job(job_id, status=f"다시 시도 중 ({i}/{len(strategies) - 1})", progress=0)
+            time.sleep(3 * i)
         try:
-            attempt(job_id, url, impersonate=False)
-        except Exception:
-            set_job(job_id, status="다른 방법으로 재시도 중", progress=0)
-            attempt(job_id, url, impersonate=True)
-    except Exception as e:
-        set_job(job_id, status="실패", error=friendly_error(e))
+            attempt(job_id, url, target)
+            return
+        except Exception as e:
+            last_err = e
+            if is_permanent_error(e):
+                break
+
+    error = friendly_error(last_err)
+    if not HAS_IMPERSONATE:
+        error += " ('처음-설치.command'를 다시 더블클릭하면 차단을 뚫는 부품이 설치돼요)"
+    set_job(job_id, status="실패", error=error)
 
 
-def attempt(job_id, url, impersonate):
-    common_opts = build_opts(impersonate)
+def attempt(job_id, url, impersonate_target):
+    common_opts = build_opts(impersonate_target)
     set_job(job_id, status="정보 확인 중")
     with yt_dlp.YoutubeDL(common_opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -123,7 +163,8 @@ def attempt(job_id, url, impersonate):
     }
     set_job(job_id, status="다운로드 중")
     with yt_dlp.YoutubeDL(dl_opts) as ydl:
-        ydl.extract_info(url, download=True)
+        # 위에서 이미 가져온 정보를 재활용 — 페이지를 다시 접속하면 봇 차단에 또 노출된다
+        ydl.process_ie_result(info, download=True)
 
     # 합친 결과가 mp4가 아닌 경우(사이트에 따라 webm 등)를 대비해 실제 파일을 찾는다
     if not out_path.exists():

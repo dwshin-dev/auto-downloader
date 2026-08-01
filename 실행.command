@@ -10,6 +10,12 @@ fi
 
 source venv/bin/activate
 
+# 최신 상태로 자동 업데이트 (틱톡 등이 자주 바뀌어서 필요해요. 몇 초면 끝남)
+echo "🔄 최신 버전 확인 중..."
+git pull --quiet 2>/dev/null
+pip install --quiet -r requirements.txt 2>/dev/null
+pip install --quiet --upgrade yt-dlp curl-cffi 2>/dev/null
+
 # 2초 후 기본 브라우저로 화면 열기
 (sleep 2 && open "http://127.0.0.1:5002") &
 
