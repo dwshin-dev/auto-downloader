@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import threading
 import time
@@ -92,12 +93,67 @@ def build_opts(impersonate_target):
         "ffmpeg_location": FFMPEG_DIR,
         "retries": RETRIES,
         "fragment_retries": RETRIES,
+        "socket_timeout": 30,
     }
     if impersonate_target:
         # 틱톡·도우인·샤오홍슈 등은 봇을 차단해서, 진짜 브라우저인 척해야 받아진다
         from yt_dlp.networking.impersonate import ImpersonateTarget
         opts["impersonate"] = ImpersonateTarget.from_str(impersonate_target)
     return opts
+
+
+def pick_sub_track(info):
+    """자막 트랙 고르기: 수동 자막 > 자동 자막, 한국어 > 영어 > 아무거나"""
+    for source in (info.get("subtitles") or {}, info.get("automatic_captions") or {}):
+        if not source:
+            continue
+        for pref in ("ko", "en"):
+            for lang, tracks in source.items():
+                if lang.lower().startswith(pref) and tracks:
+                    return tracks
+        for tracks in source.values():
+            if tracks:
+                return tracks
+    return None
+
+
+def parse_vtt(text):
+    """VTT 자막을 [{'t': '0:03', 'text': '...'}] 목록으로 바꾼다."""
+    lines_out = []
+    for block in re.split(r"\n\s*\n", text):
+        lines = [ln for ln in block.strip().splitlines() if ln.strip()]
+        for idx, line in enumerate(lines):
+            if "-->" not in line:
+                continue
+            m = re.match(r"(?:(\d+):)?(\d+):(\d+)[.,]\d+", line.strip())
+            if not m:
+                break
+            h, mnt, sec = m.groups()
+            total = int(h or 0) * 3600 + int(mnt) * 60 + int(sec)
+            if total < 3600:
+                stamp = f"{total // 60}:{total % 60:02d}"
+            else:
+                stamp = f"{total // 3600}:{(total % 3600) // 60:02d}:{total % 60:02d}"
+            txt = " ".join(lines[idx + 1:])
+            txt = re.sub(r"<[^>]+>", "", txt).strip()  # <c>, <00:00:01.000> 같은 태그 제거
+            # 자동 자막은 같은 문장이 반복돼서 붙는 경우가 많아 걸러낸다
+            if txt and (not lines_out or lines_out[-1]["text"] != txt):
+                lines_out.append({"t": stamp, "text": txt})
+            break
+    return lines_out
+
+
+def fetch_subtitles(info, opts):
+    """영상 정보에서 자막을 내려받아 파싱한다. 실패해도 다운로드에는 영향 없음."""
+    tracks = pick_sub_track(info)
+    if not tracks:
+        return None
+    track = next((t for t in tracks if t.get("ext") == "vtt"), None)
+    if not track or not track.get("url"):
+        return None
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        data = ydl.urlopen(track["url"]).read().decode("utf-8", "replace")
+    return parse_vtt(data) or None
 
 
 def is_permanent_error(err):
@@ -183,6 +239,14 @@ def attempt(job_id, url, impersonate_target):
             out_path = candidates[0]
         else:
             raise RuntimeError("다운로드는 끝났는데 파일을 찾지 못했어요.")
+
+    # 자막이 있으면 같이 가져온다 (없거나 실패해도 다운로드는 성공 처리)
+    try:
+        subs = fetch_subtitles(info, common_opts)
+    except Exception:
+        subs = None
+    if subs:
+        set_job(job_id, subs=subs)
     set_job(job_id, status="완료", progress=100, filename=out_path.name)
 
 
@@ -204,8 +268,8 @@ def api_download():
     for url in urls:
         job_id = uuid.uuid4().hex[:8]
         with lock:
-            jobs[job_id] = {"id": job_id, "url": url, "title": None,
-                            "status": "대기 중", "progress": 0, "error": None, "filename": None}
+            jobs[job_id] = {"id": job_id, "url": url, "title": None, "status": "대기 중",
+                            "progress": 0, "error": None, "filename": None, "subs": None}
             jobs_order.append(job_id)
         executor.submit(download_one, job_id, url)
     return jsonify({"count": len(urls)})

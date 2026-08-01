@@ -50,6 +50,17 @@
   .bar-fill { height: 100%; background: #4a6cf7; border-radius: 3px; transition: width .3s; }
   .err { margin-top: 8px; font-size: 13px; color: #c62828; }
   .empty { text-align: center; color: #aaa; font-size: 14px; padding: 30px 0; }
+  details.subs { margin-top: 10px; border-top: 1px solid #eef0f4; padding-top: 8px; }
+  details.subs summary { font-size: 13px; font-weight: 600; color: #4a6cf7; cursor: pointer; }
+  .subs-btns { display: flex; gap: 8px; margin: 10px 0; }
+  .mini { padding: 6px 12px; font-size: 12px; font-weight: 600; border-radius: 8px;
+          background: #eef1ff; color: #3a5ae0; }
+  .mini:hover { background: #dde3ff; }
+  .subs-list { max-height: 260px; overflow-y: auto; background: #fafbfc;
+               border-radius: 8px; padding: 10px 12px; }
+  .sub-line { font-size: 13px; line-height: 1.7; }
+  .sub-line .ts { display: inline-block; min-width: 42px; color: #999;
+                  font-variant-numeric: tabular-nums; margin-right: 6px; }
 </style>
 </head>
 <body>
@@ -100,6 +111,22 @@ function badge(status) {
   return 'b-run';
 }
 
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+let jobsById = {};
+
+async function copySubs(id, withTime) {
+  const j = jobsById[id];
+  if (!j || !j.subs) return;
+  const text = j.subs.map(s => withTime ? `[${s.t}] ${s.text}` : s.text).join('\n');
+  await navigator.clipboard.writeText(text);
+  alert('자막 ' + j.subs.length + '줄을 복사했어요! 원하는 곳에 붙여넣으세요.');
+}
+
 async function refresh() {
   const res = await fetch('/api/status');
   const data = await res.json();
@@ -115,16 +142,37 @@ async function refresh() {
   document.getElementById('summary').textContent =
     `진행 중 ${run} · 완료 ${done} · 실패 ${fail} — 저장 위치: ${data.download_dir}`;
 
+  jobsById = {};
+  data.jobs.forEach(j => jobsById[j.id] = j);
+
+  // 다시 그리기 전에 펼쳐져 있던 자막 패널을 기억해뒀다가 복원한다
+  const openIds = [...box.querySelectorAll('details.subs[open]')].map(d => d.dataset.id);
+
   box.innerHTML = data.jobs.map(j => `
     <div class="job">
       <div class="job-top">
-        <div class="job-title">${j.title || j.url}</div>
+        <div class="job-title">${esc(j.title || j.url)}</div>
         <span class="badge ${badge(j.status)}">${j.status}</span>
       </div>
       ${j.status === '다운로드 중' ? `<div class="bar"><div class="bar-fill" style="width:${j.progress}%"></div></div>` : ''}
-      ${j.error ? `<div class="err">⚠️ ${j.error}</div>` : ''}
-      ${j.status === '완료' && j.filename ? `<div class="err" style="color:#2e7d32">💾 ${j.filename}</div>` : ''}
+      ${j.error ? `<div class="err">⚠️ ${esc(j.error)}</div>` : ''}
+      ${j.status === '완료' && j.filename ? `<div class="err" style="color:#2e7d32">💾 ${esc(j.filename)}</div>` : ''}
+      ${j.subs && j.subs.length ? `
+      <details class="subs" data-id="${j.id}">
+        <summary>💬 자막 ${j.subs.length}줄 (눌러서 펼치기)</summary>
+        <div class="subs-btns">
+          <button class="mini" onclick="copySubs('${j.id}', false)">📋 자막만 전체 복사</button>
+          <button class="mini" onclick="copySubs('${j.id}', true)">📋 타임스탬프 포함 복사</button>
+        </div>
+        <div class="subs-list">${j.subs.map(s =>
+          `<div class="sub-line"><span class="ts">${s.t}</span>${esc(s.text)}</div>`).join('')}</div>
+      </details>` : ''}
     </div>`).join('');
+
+  openIds.forEach(id => {
+    const d = box.querySelector(`details.subs[data-id="${id}"]`);
+    if (d) d.open = true;
+  });
 }
 
 setInterval(refresh, 1000);
