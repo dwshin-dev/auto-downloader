@@ -22,7 +22,7 @@ python -c "from static_ffmpeg import run; run.get_or_fetch_platform_executables_
 
 echo ""
 echo "🔍 설치가 잘 됐는지 점검하는 중..."
-if python -c "import flask, yt_dlp, curl_cffi, static_ffmpeg" 2>/dev/null; then
+if python -c "import flask, yt_dlp, curl_cffi, static_ffmpeg, faster_whisper" 2>/dev/null; then
   echo "✅ 설치 완료! 이제 '실행.command'를 더블클릭하면 됩니다."
 else
   echo "❌ 설치가 완전히 끝나지 않았어요."

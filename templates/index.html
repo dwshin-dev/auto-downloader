@@ -61,6 +61,7 @@
   .sub-line { font-size: 13px; line-height: 1.7; }
   .sub-line .ts { display: inline-block; min-width: 42px; color: #999;
                   font-variant-numeric: tabular-nums; margin-right: 6px; }
+  .sub-progress { margin-top: 8px; font-size: 13px; color: #1565c0; }
 </style>
 </head>
 <body>
@@ -119,6 +120,17 @@ function esc(s) {
 
 let jobsById = {};
 
+async function transcribe(id) {
+  const res = await fetch('/api/transcribe', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({job_id: id})
+  });
+  const data = await res.json();
+  if (!res.ok) alert(data.error || '문제가 생겼어요.');
+  refresh();
+}
+
 async function copySubs(id, withTime) {
   const j = jobsById[id];
   if (!j || !j.subs) return;
@@ -157,9 +169,12 @@ async function refresh() {
       ${j.status === '다운로드 중' ? `<div class="bar"><div class="bar-fill" style="width:${j.progress}%"></div></div>` : ''}
       ${j.error ? `<div class="err">⚠️ ${esc(j.error)}</div>` : ''}
       ${j.status === '완료' && j.filename ? `<div class="err" style="color:#2e7d32">💾 ${esc(j.filename)}</div>` : ''}
+      ${j.status === '완료' && !j.subs && !j.sub_status ? `
+      <div class="subs-btns"><button class="mini" onclick="transcribe('${j.id}')">🎧 소리 듣고 자막 만들기</button></div>` : ''}
+      ${j.sub_status ? `<div class="sub-progress">🎧 ${esc(j.sub_status)}</div>` : ''}
       ${j.subs && j.subs.length ? `
       <details class="subs" data-id="${j.id}">
-        <summary>💬 자막 ${j.subs.length}줄 (눌러서 펼치기)</summary>
+        <summary>💬 ${j.sub_source || '자막'} ${j.subs.length}줄 (눌러서 펼치기)</summary>
         <div class="subs-btns">
           <button class="mini" onclick="copySubs('${j.id}', false)">📋 자막만 전체 복사</button>
           <button class="mini" onclick="copySubs('${j.id}', true)">📋 타임스탬프 포함 복사</button>

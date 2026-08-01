@@ -2,3 +2,4 @@ flask
 yt-dlp
 static-ffmpeg
 curl-cffi
+faster-whisper

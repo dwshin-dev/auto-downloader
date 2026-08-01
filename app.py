@@ -156,6 +156,49 @@ def fetch_subtitles(info, opts):
     return parse_vtt(data) or None
 
 
+def has_video_track(info):
+    """영상 트랙이 있는지 확인. 틱톡샵 연결 영상은 소리만 나오는 경우가 있다."""
+    fmts = info.get("formats") or [info]
+    return any(f.get("vcodec") not in (None, "none") for f in fmts)
+
+
+def tiktok_mp4_fallback(url):
+    """yt-dlp가 소리만 줄 때 쓰는 안전망.
+
+    틱톡샵에 연결된 영상은 틱톡 웹페이지에 영상 주소가 아예 없어서(yt-dlp 이슈 #13928)
+    공개 API를 거쳐야 mp4를 받을 수 있다. 흔한 다운로드 사이트들이 쓰는 방식.
+    """
+    from curl_cffi import requests
+    r = requests.post("https://www.tikwm.com/api/", data={"url": url, "hd": 1},
+                      impersonate="chrome", timeout=30)
+    data = (r.json() or {}).get("data") or {}
+    video_url = data.get("hdplay") or data.get("play")
+    if not video_url:
+        return None, None
+    if video_url.startswith("/"):
+        video_url = "https://www.tikwm.com" + video_url
+    return video_url, data.get("title")
+
+
+def download_via_fallback(job_id, url, out_path):
+    from curl_cffi import requests
+    video_url, _ = tiktok_mp4_fallback(url)
+    if not video_url:
+        raise RuntimeError("영상 주소를 찾지 못했어요.")
+    set_job(job_id, status="다운로드 중", progress=0)
+    resp = requests.get(video_url, impersonate="chrome", timeout=60, stream=True)
+    total = int(resp.headers.get("Content-Length") or 0)
+    done = 0
+    tmp = out_path.with_suffix(".part")
+    with open(tmp, "wb") as f:
+        for chunk in resp.iter_content(1024 * 256):
+            f.write(chunk)
+            done += len(chunk)
+            if total:
+                set_job(job_id, progress=min(round(done / total * 100), 100))
+    tmp.rename(out_path)
+
+
 def is_permanent_error(err):
     """재시도해도 소용없는 에러 (삭제됨, 비공개, 지원 안 함 등)"""
     low = str(err).lower()
@@ -219,18 +262,23 @@ def attempt(job_id, url, impersonate_target):
         elif d["status"] == "finished":
             set_job(job_id, status="합치는 중", progress=100)
 
-    dl_opts = {
-        **common_opts,
-        # 원본 최고 화질: 최고 영상 + 최고 소리를 받아서 mp4로 합침
-        "format": "bv*+ba/b",
-        "merge_output_format": "mp4",
-        "outtmpl": str(out_path.with_suffix("")) + ".%(ext)s",
-        "progress_hooks": [progress_hook],
-    }
-    set_job(job_id, status="다운로드 중")
-    with yt_dlp.YoutubeDL(dl_opts) as ydl:
-        # 위에서 이미 가져온 정보를 재활용 — 페이지를 다시 접속하면 봇 차단에 또 노출된다
-        ydl.process_ie_result(info, download=True)
+    if has_video_track(info):
+        dl_opts = {
+            **common_opts,
+            # 원본 최고 화질: 최고 영상 + 최고 소리를 받아서 mp4로 합침
+            "format": "bv*+ba/b",
+            "merge_output_format": "mp4",
+            "outtmpl": str(out_path.with_suffix("")) + ".%(ext)s",
+            "progress_hooks": [progress_hook],
+        }
+        set_job(job_id, status="다운로드 중")
+        with yt_dlp.YoutubeDL(dl_opts) as ydl:
+            # 위에서 이미 가져온 정보를 재활용 — 페이지를 다시 접속하면 봇 차단에 또 노출된다
+            ydl.process_ie_result(info, download=True)
+    else:
+        # 소리만 있는 경우 (틱톡샵 연결 영상 등) — 다른 경로로 mp4를 받는다
+        set_job(job_id, status="영상 찾는 중")
+        download_via_fallback(job_id, url, out_path)
 
     # 합친 결과가 mp4가 아닌 경우(사이트에 따라 webm 등)를 대비해 실제 파일을 찾는다
     if not out_path.exists():
@@ -246,7 +294,7 @@ def attempt(job_id, url, impersonate_target):
     except Exception:
         subs = None
     if subs:
-        set_job(job_id, subs=subs)
+        set_job(job_id, subs=subs, sub_source="영상 자막")
     set_job(job_id, status="완료", progress=100, filename=out_path.name)
 
 
@@ -269,7 +317,8 @@ def api_download():
         job_id = uuid.uuid4().hex[:8]
         with lock:
             jobs[job_id] = {"id": job_id, "url": url, "title": None, "status": "대기 중",
-                            "progress": 0, "error": None, "filename": None, "subs": None}
+                            "progress": 0, "error": None, "filename": None,
+                            "subs": None, "sub_source": None, "sub_status": None}
             jobs_order.append(job_id)
         executor.submit(download_one, job_id, url)
     return jsonify({"count": len(urls)})
@@ -304,6 +353,60 @@ def api_choose_folder():
     except subprocess.TimeoutExpired:
         pass  # 선택창을 오래 안 닫으면 그냥 기존 설정 유지
     return jsonify({"download_dir": str(get_download_dir())})
+
+
+_whisper_model = None
+_whisper_lock = threading.Lock()
+
+
+def get_whisper():
+    """음성인식 모델은 처음 쓸 때 한 번만 불러온다 (첫 사용 시 다운로드 ~500MB)."""
+    global _whisper_model
+    with _whisper_lock:
+        if _whisper_model is None:
+            from faster_whisper import WhisperModel
+            _whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
+    return _whisper_model
+
+
+def transcribe_job(job_id, video_path):
+    try:
+        set_job(job_id, sub_status="음성 인식 준비 중 (처음 한 번은 오래 걸려요)")
+        model = get_whisper()
+        set_job(job_id, sub_status="소리 듣는 중...")
+        segments, _ = model.transcribe(str(video_path), beam_size=1, vad_filter=True)
+        lines = []
+        for seg in segments:
+            total = int(seg.start)
+            stamp = (f"{total // 60}:{total % 60:02d}" if total < 3600
+                     else f"{total // 3600}:{(total % 3600) // 60:02d}:{total % 60:02d}")
+            text = seg.text.strip()
+            if text:
+                lines.append({"t": stamp, "text": text})
+                set_job(job_id, sub_status=f"소리 듣는 중... {len(lines)}줄")
+        if lines:
+            set_job(job_id, subs=lines, sub_source="음성인식", sub_status=None)
+        else:
+            set_job(job_id, sub_status="말소리를 찾지 못했어요 (음악만 있는 영상일 수 있어요)")
+    except Exception as e:
+        set_job(job_id, sub_status=f"음성 인식 실패: {str(e)[:80]}")
+
+
+@app.route("/api/transcribe", methods=["POST"])
+def api_transcribe():
+    job_id = (request.json or {}).get("job_id")
+    with lock:
+        job = jobs.get(job_id)
+    if not job or not job.get("filename"):
+        return jsonify({"error": "먼저 영상을 받아야 해요."}), 400
+    path = get_download_dir() / job["filename"]
+    if not path.exists():
+        return jsonify({"error": "영상 파일을 찾지 못했어요. 저장 폴더를 옮기셨나요?"}), 400
+    if job.get("sub_status"):
+        return jsonify({"ok": True})  # 이미 돌아가는 중
+    set_job(job_id, sub_status="대기 중")
+    threading.Thread(target=transcribe_job, args=(job_id, path), daemon=True).start()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/clear-done", methods=["POST"])
