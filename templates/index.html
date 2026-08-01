@@ -62,6 +62,10 @@
   .sub-line .ts { display: inline-block; min-width: 42px; color: #999;
                   font-variant-numeric: tabular-nums; margin-right: 6px; }
   .sub-progress { margin-top: 8px; font-size: 13px; color: #1565c0; }
+  .offline {
+    display: none; background: #fff3e0; color: #8a5100; border: 1px solid #ffcc80;
+    border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.6;
+  }
 </style>
 </head>
 <body>
@@ -75,6 +79,12 @@
     <button class="ghost" onclick="openFolder()">📂 저장 폴더 열기</button>
     <button class="ghost" onclick="chooseFolder()">📁 저장 위치 바꾸기</button>
     <button class="ghost" onclick="clearDone()">🧹 끝난 항목 지우기</button>
+  </div>
+
+  <div class="offline" id="offline">
+    ⚠️ 프로그램이 꺼진 것 같아요.<br>
+    검은 창(터미널)이 닫혔는지 확인하고 <b>실행.command</b>를 다시 더블클릭해주세요.
+    다시 켜면 이 안내는 저절로 사라져요.
   </div>
 
   <div class="summary" id="summary"></div>
@@ -142,9 +152,23 @@ async function copySubs(id, withTime) {
   alert('자막 ' + j.subs.length + '줄을 복사했어요! 원하는 곳에 붙여넣으세요.');
 }
 
+let failCount = 0;
+let lastHtml = '';
+
 async function refresh() {
-  const res = await fetch('/api/status');
-  const data = await res.json();
+  let data;
+  try {
+    const res = await fetch('/api/status');
+    if (!res.ok) throw new Error(res.status);
+    data = await res.json();
+  } catch (e) {
+    // 잠깐 끊긴 걸로 놀라게 하지 않는다. 3번(3초) 연속 실패해야 알린다
+    if (++failCount >= 3) document.getElementById('offline').style.display = 'block';
+    return;
+  }
+  failCount = 0;
+  document.getElementById('offline').style.display = 'none';
+
   const box = document.getElementById('jobs');
   if (!data.jobs.length) {
     box.innerHTML = '<div class="empty">아직 받은 영상이 없어요</div>';
@@ -160,10 +184,7 @@ async function refresh() {
   jobsById = {};
   data.jobs.forEach(j => jobsById[j.id] = j);
 
-  // 다시 그리기 전에 펼쳐져 있던 자막 패널을 기억해뒀다가 복원한다
-  const openIds = [...box.querySelectorAll('details.subs[open]')].map(d => d.dataset.id);
-
-  box.innerHTML = data.jobs.map(j => `
+  const html = data.jobs.map(j => `
     <div class="job">
       <div class="job-top">
         <div class="job-title">${esc(j.title || j.url)}</div>
@@ -188,9 +209,26 @@ async function refresh() {
       </details>` : ''}
     </div>`).join('');
 
+  // 바뀐 게 없으면 아예 다시 그리지 않는다.
+  // 안 그러면 자막을 읽는 중에 1초마다 스크롤이 맨 위로 튀고 글자 선택이 끊긴다.
+  if (html === lastHtml) return;
+  lastHtml = html;
+
+  // 펼쳐둔 자막 패널과 어디까지 스크롤했는지를 기억했다가 복원한다
+  const openIds = [...box.querySelectorAll('details.subs[open]')].map(d => d.dataset.id);
+  const scrolls = {};
+  box.querySelectorAll('details.subs[open] .subs-list').forEach(el => {
+    scrolls[el.closest('details').dataset.id] = el.scrollTop;
+  });
+
+  box.innerHTML = html;
+
   openIds.forEach(id => {
     const d = box.querySelector(`details.subs[data-id="${id}"]`);
-    if (d) d.open = true;
+    if (!d) return;
+    d.open = true;
+    const list = d.querySelector('.subs-list');
+    if (list && scrolls[id]) list.scrollTop = scrolls[id];
   });
 }
 
