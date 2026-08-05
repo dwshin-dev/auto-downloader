@@ -35,12 +35,38 @@ app = Flask(__name__)
 FFMPEG, FFPROBE = static_ffmpeg_run.get_or_fetch_platform_executables_else_raise()
 FFMPEG_DIR = str(Path(FFMPEG).parent)
 
-# 브라우저 흉내(impersonate)에 필요한 부품이 있는지 확인
-try:
-    import curl_cffi  # noqa: F401
-    HAS_IMPERSONATE = True
-except ImportError:
-    HAS_IMPERSONATE = False
+def find_impersonate_clients():
+    """이 컴퓨터에서 실제로 쓸 수 있는 브라우저 흉내 목록을 뽑는다.
+
+    curl_cffi 버전마다 흉내낼 수 있는 브라우저가 다르다. 없는 걸 지정하면
+    'Impersonate target "safari" is not available' 오류가 나므로,
+    이름을 박아두지 말고 그때그때 있는 것 중에서 고른다.
+    """
+    try:
+        import curl_cffi  # noqa: F401
+    except ImportError:
+        return []  # 부품 자체가 없으면 흉내를 못 낸다
+
+    try:
+        with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+            targets = ydl._get_available_impersonate_targets()
+    except Exception:
+        # yt-dlp 내부가 바뀌어 목록을 못 읽어도, chrome은 어느 버전에서나 되므로 그것만 쓴다
+        return ["chrome"]
+
+    found = []
+    for entry in targets:
+        target = entry[0] if isinstance(entry, (tuple, list)) else entry
+        client = getattr(target, "client", None)
+        if client and client not in found:
+            found.append(client)
+    # 잘 통하는 순서대로 앞에 놓고, 나머지도 뒤에 남겨둔다
+    preferred = [c for c in ("chrome", "safari", "edge", "firefox") if c in found]
+    return preferred + [c for c in found if c not in preferred] or ["chrome"]
+
+
+IMPERSONATE_CLIENTS = find_impersonate_clients()
+HAS_IMPERSONATE = bool(IMPERSONATE_CLIENTS)
 
 # 봇 차단이 심해서 처음부터 브라우저 흉내가 필요한 사이트들
 BOT_BLOCKING_SITES = ("tiktok.com", "douyin.com", "xiaohongshu.com", "xhslink.com", "instagram.com")
@@ -68,6 +94,9 @@ def friendly_error(err):
         return "삭제됐거나 존재하지 않는 영상이에요."
     if "geo-restricted" in low or "in your country" in low or "your location" in low:
         return "지역 제한이 걸린 영상이라 한국에서는 받을 수 없어요."
+    if "impersonate target" in low and "not available" in low:
+        return ("이 컴퓨터에서 쓸 수 없는 방식으로 시도했어요. 다시 한 번 눌러보세요. "
+                "계속 그러면 '처음-설치.command'를 다시 더블클릭해주세요.")
     if "urlopen" in low or "timed out" in low or "connection" in low or "network" in low:
         return "인터넷 연결에 문제가 있어요. 잠시 후 다시 시도해주세요."
     return f"오류가 발생했어요: {msg[:150]}"
@@ -305,17 +334,21 @@ def _download_one(job_id, url):
             "'📁 저장 위치 바꾸기'로 폴더를 다시 골라주세요."))
         return
 
-    # 봇 차단은 간헐적이라 재시도 자체가 효과가 있고, 브라우저 종류를 바꾸면 뚫리기도 한다
-    if HAS_IMPERSONATE:
-        if any(site in url for site in BOT_BLOCKING_SITES):
-            strategies = ["chrome", "chrome", "safari", "chrome", "safari"]
-        else:
-            strategies = [None, "chrome", "safari"]
-    else:
+    # 봇 차단은 간헐적이라 재시도 자체가 효과가 있고, 브라우저 종류를 바꾸면 뚫리기도 한다.
+    # 어떤 브라우저를 흉내낼 수 있는지는 컴퓨터마다 다르므로 있는 것 중에서 고른다.
+    first = IMPERSONATE_CLIENTS[0] if IMPERSONATE_CLIENTS else None
+    second = IMPERSONATE_CLIENTS[1] if len(IMPERSONATE_CLIENTS) > 1 else first
+    if not first:
         strategies = [None]
+    elif any(site in url for site in BOT_BLOCKING_SITES):
+        strategies = [first, first, second, first, second]
+    else:
+        strategies = [None, first, second]
 
     last_err = None
     for i, target in enumerate(strategies):
+        if target and target not in IMPERSONATE_CLIENTS:
+            continue  # 쓸 수 없다고 판명된 흉내는 건너뛴다
         if i:
             set_job(job_id, status=f"다시 시도 중 ({i}/{len(strategies) - 1})", progress=0)
             time.sleep(3 * i)
@@ -323,13 +356,27 @@ def _download_one(job_id, url):
             attempt(job_id, url, target)
             return
         except Exception as e:
+            # 이 컴퓨터가 지원하지 않는 흉내였다면 목록에서 빼고 다음 것으로 넘어간다
+            if target and "is not available" in str(e):
+                if target in IMPERSONATE_CLIENTS:
+                    IMPERSONATE_CLIENTS.remove(target)
+                continue
             last_err = e
             if is_permanent_error(e):
                 break
 
+    if last_err is None:
+        # 쓸 수 있는 흉내가 하나도 없어서 아무것도 못 해본 경우 — 흉내 없이 마지막으로 시도
+        try:
+            attempt(job_id, url, None)
+            return
+        except Exception as e:
+            last_err = e
+
     error = friendly_error(last_err)
-    if not HAS_IMPERSONATE:
-        error += " ('처음-설치.command'를 다시 더블클릭하면 차단을 뚫는 부품이 설치돼요)"
+    if not IMPERSONATE_CLIENTS:
+        error += ("\n(차단을 뚫는 부품이 준비되지 않았어요. "
+                  "'처음-설치.command'를 다시 더블클릭하면 설치돼요)")
     set_job(job_id, status="실패", error=error)
 
 
