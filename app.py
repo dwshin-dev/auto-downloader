@@ -251,6 +251,70 @@ def vfr_target_fps(probe):
     return 60 if avg > 45 else 30
 
 
+# 맥(퀵타임·파인더 미리보기)이 그대로 열 수 있는 코덱
+MAC_VIDEO_CODECS = {"h264", "hevc", "mpeg4", "prores", "mjpeg"}
+MAC_AUDIO_CODECS = {"aac", "mp3", "alac", "pcm_s16le", "pcm_s24le", "ac3"}
+MAC_CONTAINERS = (".mp4", ".mov", ".m4v")
+
+
+def playability_problem(path, probe):
+    """맥에서 못 여는 파일인지 본다.
+
+    None = 괜찮음 / "container" = 그릇만 문제(다시 담기만 하면 됨) / "codec" = 알맹이가 문제(변환 필요)
+    """
+    if not probe:
+        return None
+    streams = probe.get("streams") or []
+    v = next((s for s in streams if s.get("codec_type") == "video"), None)
+    a = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    if not v:
+        return None
+    if v.get("codec_name") not in MAC_VIDEO_CODECS:
+        return "codec"
+    if a and a.get("codec_name") not in MAC_AUDIO_CODECS:
+        return "codec"
+    if path.suffix.lower() not in MAC_CONTAINERS:
+        return "container"
+    return None
+
+
+def make_playable(job_id, path):
+    """맥에서 안 열리는 파일을 열리게 고친다. 고친 뒤의 경로를 준다.
+
+    - 그릇만 문제면 다시 담기만 한다 (화질 그대로, 몇 초면 끝)
+    - 코덱이 문제면 변환한다 (시간이 더 걸림)
+    """
+    problem = playability_problem(path, probe_media(path))
+    if not problem:
+        return path
+
+    # 고친 파일이 원래 이름을 그대로 쓰게 한다 (친구가 헷갈리지 않게)
+    fixed = path.with_suffix(".mp4")
+    tmp = path.with_name(path.stem + ".고치는중.mp4")
+
+    if problem == "container":
+        set_job(job_id, status="영상 정리 중")
+        cmd = [FFMPEG, "-y", "-v", "error", "-i", str(path),
+               "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
+               "-movflags", "+faststart", str(tmp)]
+    else:
+        set_job(job_id, status="맥에서 열리게 바꾸는 중")
+        cmd = [FFMPEG, "-y", "-v", "error", "-i", str(path),
+               "-map", "0:v:0", "-map", "0:a:0?",
+               "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+               "-c:a", "aac", "-b:a", "192k",
+               "-movflags", "+faststart", str(tmp)]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    if result.returncode != 0 or not tmp.exists():
+        tmp.unlink(missing_ok=True)
+        return path  # 고치기 실패하면 원본이라도 남긴다
+
+    path.unlink(missing_ok=True)  # 못 여는 파일은 지운다 (친구가 헷갈리지 않게)
+    tmp.replace(fixed)
+    return fixed
+
+
 def tiktok_mp4_fallback(url):
     """yt-dlp가 소리만 줄 때 쓰는 안전망.
 
@@ -433,6 +497,13 @@ def attempt(job_id, url, impersonate_target):
             out_path = max(candidates, key=lambda p: p.stat().st_size)
         else:
             raise RuntimeError("다운로드는 끝났는데 파일을 찾지 못했어요.")
+
+    # 맥에서 더블클릭해도 안 열리는 형식이면(webm, mkv, VP9/AV1 등) 열리게 고친다.
+    # 실패해도 받은 파일은 그대로 남긴다.
+    try:
+        out_path = make_playable(job_id, out_path)
+    except Exception:
+        pass
 
     # 자막이 있으면 같이 가져온다 (없거나 실패해도 다운로드는 성공 처리)
     try:
