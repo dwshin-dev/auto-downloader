@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 틱톡 썸네일·영상을 페이지에서 바로 보여줄 때, 우리 주소를 안 보내야 차단당하지 않는다 -->
+<meta name="referrer" content="no-referrer">
 <title>영상 소스 다운로더</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -77,6 +79,84 @@
     display: none; background: #fff3e0; color: #8a5100; border: 1px solid #ffcc80;
     border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.6;
   }
+
+  /* ── 탭 ── */
+  .tabbar { display: flex; gap: 4px; border-bottom: 2px solid #e5e7ec; margin-bottom: 22px; }
+  .tabbar button {
+    background: none; border: none; border-radius: 0; padding: 10px 16px;
+    font-size: 15px; font-weight: 700; color: #999; cursor: pointer;
+    border-bottom: 3px solid transparent; margin-bottom: -2px;
+  }
+  .tabbar button:hover { color: #555; background: none; }
+  .tabbar button.active { color: #4a6cf7; border-bottom-color: #4a6cf7; }
+
+  /* ── 키워드 찾기 탭 ── */
+  .kw-row { display: flex; gap: 10px; }
+  .kw-row input {
+    flex: 1; padding: 12px 14px; font-size: 15px; border: 1.5px solid #d5d8de;
+    border-radius: 10px; font-family: inherit; background: #fff;
+  }
+  .kw-row input:focus { outline: none; border-color: #4a6cf7; }
+  .lang-card { background: #fff; border: 1px solid #e5e7ec; border-radius: 10px;
+               padding: 12px 14px; margin-top: 12px; }
+  .lang-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .lang-name { font-size: 12px; font-weight: 700; color: #888; min-width: 44px; }
+  .lang-word { font-size: 15px; font-weight: 700; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+  .chip {
+    padding: 5px 11px; font-size: 12px; font-weight: 600; border-radius: 20px;
+    background: #eef1ff; color: #3a5ae0; border: none; cursor: pointer;
+  }
+  .chip:hover { background: #dde3ff; }
+  .chip.out { background: #f1f3f6; color: #555; }
+  .chip.out:hover { background: #e4e7ec; }
+  .sec-title { display: flex; align-items: baseline; gap: 8px; margin: 26px 0 10px;
+               font-size: 16px; font-weight: 700; }
+  .sec-title .searching { font-size: 12px; color: #888; font-weight: 400; }
+  .vid-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+  .vid-grid.tiktok { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .vid-grid .empty { grid-column: 1 / -1; padding: 18px 0; }
+  .vid { background: #fff; border: 1px solid #e5e7ec; border-radius: 10px; overflow: hidden;
+         display: flex; flex-direction: column; }
+  .vid .thumb-wrap { position: relative; cursor: pointer; background: #000; }
+  .vid img { width: 100%; display: block; aspect-ratio: 16 / 9; object-fit: cover; }
+  .vid-grid.tiktok .vid img { aspect-ratio: 3 / 4; }
+  .vid .dur { position: absolute; right: 6px; bottom: 6px; background: rgba(0,0,0,.75);
+              color: #fff; font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 4px; }
+  .vid .playmark { position: absolute; inset: 0; display: flex; align-items: center;
+                   justify-content: center; font-size: 34px; color: #fff;
+                   text-shadow: 0 1px 6px rgba(0,0,0,.6); opacity: 0; transition: opacity .15s; }
+  .vid .thumb-wrap:hover .playmark { opacity: 1; }
+  .vid .vt { font-size: 12.5px; font-weight: 600; line-height: 1.4; padding: 8px 10px 2px;
+             display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .vid .vm { font-size: 11.5px; color: #888; padding: 0 10px; }
+  .vid .vbtns { display: flex; gap: 6px; padding: 8px 10px 10px; margin-top: auto; }
+  .vid .vbtns .mini { flex: 1; text-align: center; }
+  .kw-note { background: #fff; border: 1px dashed #d5d8de; border-radius: 10px;
+             padding: 14px; margin-top: 16px; font-size: 13px; color: #777; line-height: 1.8; }
+  details.kw-reviews { margin-top: 26px; background: #fff; border: 1px solid #e5e7ec;
+                       border-radius: 10px; padding: 12px 14px; }
+  details.kw-reviews summary { font-size: 14px; font-weight: 700; color: #4a6cf7; cursor: pointer; }
+  details.kw-reviews textarea { height: 100px; margin-top: 10px; }
+
+  /* ── 재생 창 ── */
+  .player-bg { display: none; position: fixed; inset: 0; background: rgba(10,12,20,.82);
+               z-index: 50; align-items: center; justify-content: center; padding: 20px; }
+  .player-bg.show { display: flex; }
+  .player-box { background: #14161f; border-radius: 14px; padding: 14px;
+                max-width: min(860px, 94vw); max-height: 92vh; display: flex;
+                flex-direction: column; gap: 10px; }
+  .player-box iframe { width: min(800px, 90vw); aspect-ratio: 16 / 9; border: none; border-radius: 8px; }
+  .player-box video { max-width: min(420px, 88vw); max-height: 68vh; border-radius: 8px;
+                      align-self: center; }
+  .player-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .player-title { color: #eee; font-size: 13px; font-weight: 600; overflow: hidden;
+                  text-overflow: ellipsis; white-space: nowrap; }
+  .player-close { background: #2a2d3a; color: #ddd; padding: 6px 12px; font-size: 12px; }
+  .player-actions { display: flex; gap: 8px; justify-content: center; }
+  .toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
+           background: #1a1a2e; color: #fff; font-size: 14px; font-weight: 600;
+           padding: 12px 20px; border-radius: 10px; z-index: 60; display: none; }
 </style>
 </head>
 <body>
@@ -84,6 +164,12 @@
   <h1>🎬 영상 소스 다운로더</h1>
   <p class="sub">유튜브 · 인스타그램 · 틱톡 · 도우인 · 샤오홍슈 — 원본 최고 화질로 받아요</p>
 
+  <div class="tabbar" id="tabbar">
+    <button class="active" data-tab="download" onclick="switchTab('download')">⬇️ 다운로드</button>
+    <button data-tab="keyword" onclick="switchTab('keyword')">🔍 키워드 찾기</button>
+  </div>
+
+  <div id="tab-download">
   <textarea id="urls" placeholder="영상 주소를 붙여넣으세요. 여러 개면 한 줄에 하나씩!&#10;https://www.youtube.com/watch?v=...&#10;https://www.tiktok.com/@.../video/..."></textarea>
   <div class="btns" id="btns">
     <button class="primary" onclick="startDownload()">⬇️ 다운로드 시작</button>
@@ -101,6 +187,49 @@
 
   <div class="summary" id="summary"></div>
   <div id="jobs"><div class="empty">아직 받은 영상이 없어요</div></div>
+  </div><!-- /tab-download -->
+
+  <div id="tab-keyword" style="display:none">
+    <div class="kw-row">
+      <input id="kw-input" placeholder="찾고 싶은 상품·키워드를 한국어로 (예: 스텐 얼룩 제거제)"
+             onkeydown="if(event.key==='Enter')kwGo()">
+      <button class="primary" onclick="kwGo()">🔍 찾기</button>
+    </div>
+    <p class="hint">영어·중국어로 번역하고, 연관 검색어를 보여주고, 유튜브·틱톡은 여기서 바로 검색해요.
+       회색 버튼(↗)은 그 사이트를 검색된 상태로 새 탭에 열어줘요. 연관 검색어를 누르면 그 말로 다시 검색해요.</p>
+
+    <div id="kw-langs"></div>
+    <div id="kw-results"></div>
+
+    <div class="kw-note" id="kw-note">
+      💡 <b>이렇게 써보세요</b><br>
+      1. 상품 키워드를 한국어로 넣고 <b>찾기</b> — 영어·중국어 번역과 연관 검색어가 나와요.<br>
+      2. 아래 유튜브·틱톡 결과에서 썸네일을 누르면 <b>그 자리에서 바로 재생</b>돼요.<br>
+      3. 쓸만하면 <b>⬇️ 받기</b> — 다운로드 탭에 추가되고, 자막·편집용 파일도 거기서 만들 수 있어요.<br>
+      4. 영상을 보다가 새 키워드를 발견하면(예: 무지개 얼룩) 그 말로 다시 찾아보세요.
+    </div>
+
+    <details class="kw-reviews">
+      <summary>🛒 쿠팡 리뷰에서 키워드 뽑기</summary>
+      <p class="hint" style="margin-top:8px">키워드가 잘 안 잡힐 때: 위 [쿠팡 ↗] 버튼으로 상품 리뷰를 열고,
+         리뷰 글을 드래그해 복사한 뒤 아래에 붙여넣으세요. 자주 나온 단어를 세어드려요.</p>
+      <textarea id="review-text" placeholder="여기에 리뷰 내용을 붙여넣으세요 (많이 붙여넣을수록 정확해요)"></textarea>
+      <button class="ghost" style="margin-top:10px" onclick="analyzeReviews()">🔢 자주 나온 단어 보기</button>
+      <div class="chips" id="review-result"></div>
+    </details>
+  </div><!-- /tab-keyword -->
+
+  <div class="player-bg" id="player" onclick="if(event.target===this)closePlayer()">
+    <div class="player-box">
+      <div class="player-top">
+        <div class="player-title" id="player-title"></div>
+        <button class="player-close" onclick="closePlayer()">✕ 닫기</button>
+      </div>
+      <div id="player-body"></div>
+      <div class="player-actions" id="player-actions"></div>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
 
   <div class="bye" id="bye">
     👋 프로그램을 껐어요.<br>
@@ -179,6 +308,8 @@ async function quitApp() {
   document.getElementById('summary').style.display = 'none';
   document.getElementById('urls').style.display = 'none';
   document.getElementById('offline').style.display = 'none';
+  document.getElementById('tabbar').style.display = 'none';
+  document.getElementById('tab-keyword').style.display = 'none';
   document.getElementById('bye').style.display = 'block';
 }
 
@@ -290,6 +421,230 @@ async function refresh() {
 
 setInterval(refresh, 1000);
 refresh();
+
+/* ─────────── 여기부터 키워드 찾기 탭 (기존 다운로드 코드와 독립) ─────────── */
+
+function switchTab(name) {
+  document.getElementById('tab-download').style.display = name === 'download' ? '' : 'none';
+  document.getElementById('tab-keyword').style.display = name === 'keyword' ? '' : 'none';
+  document.querySelectorAll('#tabbar button').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === name));
+}
+
+// onclick 속성에 문자열을 끼워 넣으면 따옴표가 깨진다.
+// 대신 실행할 일을 배열에 담아두고 번호로 부른다.
+const kwActions = [];
+function act(fn) { kwActions.push(fn); return `kwActions[${kwActions.length - 1}]()`; }
+
+function escAttr(s) { return esc(s).replace(/"/g, '&quot;'); }
+
+function fmtDur(s) {
+  s = Math.round(s);
+  const m = Math.floor(s / 60), sec = String(s % 60).padStart(2, '0');
+  return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+function fmtViews(n) {
+  if (n >= 1e8) return (n / 1e8).toFixed(1).replace(/\.0$/, '') + '억회';
+  if (n >= 1e4) return (n / 1e4).toFixed(1).replace(/\.0$/, '') + '만회';
+  return n + '회';
+}
+
+const LANGS = [
+  {key: 'ko', name: '한국어', hl: 'ko'},
+  {key: 'en', name: '영어', hl: 'en'},
+  {key: 'zh', name: '중국어', hl: 'zh-CN'},
+];
+// 언어마다 실제로 쓸 만한 사이트만 새-탭 검색 버튼으로 보여준다
+const OUTLINKS = {
+  ko: [['쿠팡', 'coupang'], ['유튜브', 'youtube'], ['틱톡', 'tiktok'], ['인스타그램', 'instagram']],
+  en: [['틱톡', 'tiktok'], ['유튜브', 'youtube'], ['인스타그램', 'instagram']],
+  zh: [['샤오홍슈', 'xiaohongshu'], ['도우인', 'douyin'], ['틱톡', 'tiktok']],
+};
+function outUrl(site, k) {
+  const e = encodeURIComponent(k);
+  return {
+    coupang: 'https://www.coupang.com/np/search?q=' + e,
+    youtube: 'https://www.youtube.com/results?search_query=' + e,
+    tiktok: 'https://www.tiktok.com/search?q=' + e,
+    instagram: 'https://www.instagram.com/explore/search/keyword/?q=' + e,
+    xiaohongshu: 'https://www.xiaohongshu.com/search_result?keyword=' + e,
+    douyin: 'https://www.douyin.com/search/' + e,
+  }[site];
+}
+
+async function kwGo() {
+  const kw = document.getElementById('kw-input').value.trim();
+  if (!kw) { alert('찾고 싶은 키워드를 먼저 입력해주세요!'); return; }
+  document.getElementById('kw-note').style.display = 'none';
+  const langsBox = document.getElementById('kw-langs');
+  langsBox.innerHTML = '<p class="hint" style="margin-top:14px">🌐 번역하는 중...</p>';
+  let t;
+  try {
+    const res = await fetch('/api/keyword/translate', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({keyword: kw})});
+    t = await res.json();
+  } catch (e) {
+    t = {ko: kw, error: '번역이 안 됐어요. 인터넷 연결을 확인해주세요. 한국어로는 계속 검색할 수 있어요.'};
+  }
+  renderLangs(t);
+  // 친구 루틴대로 영어로 먼저 찾아본다. 번역이 안 됐으면 한국어로.
+  searchBoth(t.en || t.ko);
+  LANGS.forEach(l => t[l.key] && loadSuggest(l.key, t[l.key]));
+}
+
+function renderLangs(t) {
+  document.getElementById('kw-langs').innerHTML =
+    LANGS.filter(l => t[l.key]).map(l => {
+      const w = t[l.key];
+      return `
+      <div class="lang-card">
+        <div class="lang-top">
+          <span class="lang-name">${l.name}</span>
+          <span class="lang-word">${esc(w)}</span>
+        </div>
+        <div class="chips">
+          <button class="chip" onclick="${act(() => searchBoth(w))}">🔍 이 말로 아래에서 검색</button>
+          ${OUTLINKS[l.key].map(([name, site]) =>
+            `<button class="chip out" onclick="${act(() => window.open(outUrl(site, w)))}">${name} ↗</button>`
+          ).join('')}
+        </div>
+        <div class="chips" id="sugg-${l.key}"></div>
+      </div>`;
+    }).join('') +
+    (t.error ? `<div class="warn">⚠️ ${esc(t.error)}</div>` : '');
+}
+
+async function loadSuggest(key, word) {
+  const el = document.getElementById('sugg-' + key);
+  if (!el) return;
+  try {
+    const hl = LANGS.find(l => l.key === key).hl;
+    const res = await fetch(`/api/keyword/suggest?q=${encodeURIComponent(word)}&hl=${encodeURIComponent(hl)}`);
+    const data = await res.json();
+    if (!data.suggestions || !data.suggestions.length) return;
+    el.innerHTML = '<span class="lang-name">연관</span>' +
+      data.suggestions.map(s =>
+        `<button class="chip" onclick="${act(() => searchBoth(s))}">${esc(s)}</button>`).join('');
+  } catch (e) {}  // 추천이 안 떠도 검색은 되니까 조용히 넘어간다
+}
+
+const vids = [];   // 검색 결과 영상 정보 (onclick에 번호로 넘기려고 보관)
+let searchSeq = 0; // 새 검색을 시작하면 이전 검색의 늦은 응답은 버린다
+
+function searchBoth(word) {
+  const seq = ++searchSeq;
+  document.getElementById('kw-results').innerHTML = `
+    <div class="sec-title">📺 유튜브 <span class="searching" id="label-youtube">"${esc(word)}" 검색 중...</span></div>
+    <div class="vid-grid" id="grid-youtube"><div class="empty">⏳ 찾는 중이에요...</div></div>
+    <div class="sec-title">🎵 틱톡 <span class="searching" id="label-tiktok">"${esc(word)}" 검색 중...</span></div>
+    <div class="vid-grid tiktok" id="grid-tiktok"><div class="empty">⏳ 찾는 중이에요...</div></div>`;
+  searchOne('youtube', word, seq);
+  searchOne('tiktok', word, seq);
+}
+
+async function searchOne(platform, word, seq) {
+  let data, ok;
+  try {
+    const res = await fetch(`/api/keyword/search?platform=${platform}&q=${encodeURIComponent(word)}`);
+    ok = res.ok;
+    data = await res.json();
+  } catch (e) { ok = false; data = {error: '검색이 지금 안 돼요. 인터넷 연결을 확인해주세요.'}; }
+  if (seq !== searchSeq) return;
+  const grid = document.getElementById('grid-' + platform);
+  const label = document.getElementById('label-' + platform);
+  if (!grid) return;
+  const openUrl = outUrl(platform === 'youtube' ? 'youtube' : 'tiktok', word);
+  if (!ok || !data.results || !data.results.length) {
+    if (label) label.textContent = `"${word}"`;
+    grid.innerHTML = `<div class="empty">😢 ${esc(data.error || '결과가 없어요. 다른 키워드로 해보세요.')}<br><br>
+      <button class="chip out" onclick="${act(() => window.open(openUrl))}">새 탭으로 검색 ↗</button></div>`;
+    return;
+  }
+  if (label) label.textContent = `"${word}" — ${data.results.length}개 찾음`;
+  grid.innerHTML = data.results.map(v => {
+    const i = vids.push({...v, platform}) - 1;
+    return `
+    <div class="vid">
+      <div class="thumb-wrap" onclick="openPlayer(${i})">
+        ${v.thumb ? `<img src="${escAttr(v.thumb)}" loading="lazy" alt="">` : ''}
+        <div class="playmark">▶</div>
+        ${v.duration ? `<div class="dur">${fmtDur(v.duration)}</div>` : ''}
+      </div>
+      <div class="vt">${esc(v.title)}</div>
+      <div class="vm">${[v.views != null ? '조회 ' + fmtViews(v.views) : '', v.channel ? esc(v.channel) : '']
+        .filter(Boolean).join(' · ')}</div>
+      <div class="vbtns">
+        <button class="mini" onclick="grabVideo(this, ${i})">⬇️ 받기</button>
+        <button class="mini" onclick="window.open('${escAttr(v.url)}')">원본 ↗</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openPlayer(i) {
+  const v = vids[i];
+  document.getElementById('player-title').textContent = v.title;
+  document.getElementById('player-body').innerHTML = v.platform === 'youtube'
+    ? `<iframe src="${escAttr(v.embed)}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`
+    : `<video src="${escAttr(v.play)}" controls autoplay playsinline></video>`;
+  document.getElementById('player-actions').innerHTML = `
+    <button class="mini" onclick="grabVideo(this, ${i})">⬇️ 이 영상 받기</button>
+    <button class="mini" onclick="window.open('${escAttr(v.url)}')">원본 페이지 열기 ↗</button>`;
+  document.getElementById('player').classList.add('show');
+}
+function closePlayer() {
+  document.getElementById('player').classList.remove('show');
+  document.getElementById('player-body').innerHTML = '';  // 재생을 확실히 멈춘다
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePlayer(); });
+
+async function grabVideo(btn, i) {
+  btn.disabled = true;
+  btn.textContent = '⏳';
+  try {
+    const res = await fetch('/api/download', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({urls: vids[i].url})});
+    if (!res.ok) throw new Error();
+    btn.textContent = '✅ 추가됨';
+    toast('다운로드를 시작했어요! ⬇️ 다운로드 탭에서 확인하세요.');
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '⬇️ 받기';
+    alert('다운로드 목록에 넣지 못했어요. 다시 눌러보세요.');
+  }
+}
+
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.style.display = 'none', 2600);
+}
+
+async function analyzeReviews() {
+  const text = document.getElementById('review-text').value;
+  const box = document.getElementById('review-result');
+  box.innerHTML = '<span class="hint">세는 중...</span>';
+  let data, ok;
+  try {
+    const res = await fetch('/api/keyword/analyze-reviews', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text})});
+    ok = res.ok;
+    data = await res.json();
+  } catch (e) { ok = false; data = {error: '분석이 지금 안 돼요. 다시 눌러보세요.'}; }
+  if (!ok) { box.innerHTML = `<span class="hint">⚠️ ${esc(data.error)}</span>`; return; }
+  box.innerHTML = '<span class="hint" style="width:100%">단어를 누르면 그 말로 위에서 검색해요 👇</span>' +
+    data.words.map(w =>
+      `<button class="chip" onclick="${act(() => {
+        document.getElementById('kw-input').value = w.word;
+        kwGo();
+      })}">${esc(w.word)} <b>${w.count}</b></button>`).join('');
+}
 </script>
 </body>
 </html>

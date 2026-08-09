@@ -6,7 +6,10 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.parse
+import urllib.request
 import uuid
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -767,6 +770,170 @@ def api_clear_done():
             jobs_order.remove(j)
             del jobs[j]
     return jsonify({"ok": True})
+
+
+# ────────────────────────────────────────────────────────────
+# 키워드 찾기 탭 — 번역·연관 검색어·사이트 안 검색·리뷰 분석
+# (기존 다운로드 기능과는 독립. 여기가 다 죽어도 다운로드는 된다)
+# ────────────────────────────────────────────────────────────
+
+
+def http_get_json(url, timeout=15):
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        charset = r.headers.get_content_charset() or "utf-8"
+        return json.loads(r.read().decode(charset, "replace"))
+
+
+@app.route("/api/keyword/translate", methods=["POST"])
+def api_keyword_translate():
+    """한국어 키워드를 영어·중국어로 번역한다. 하나가 실패해도 나머지는 준다."""
+    keyword = ((request.json or {}).get("keyword") or "").strip()
+    if not keyword:
+        return jsonify({"error": "키워드를 먼저 입력해주세요."}), 400
+    from deep_translator import GoogleTranslator
+    out = {"ko": keyword, "en": None, "zh": None}
+    for key, target in (("en", "en"), ("zh", "zh-CN")):
+        try:
+            out[key] = GoogleTranslator(source="auto", target=target).translate(keyword)
+        except Exception:
+            pass
+    if not out["en"] and not out["zh"]:
+        out["error"] = ("번역이 안 됐어요. 인터넷 연결을 확인해주세요. "
+                        "한국어로는 계속 검색할 수 있어요.")
+    return jsonify(out)
+
+
+@app.route("/api/keyword/suggest")
+def api_keyword_suggest():
+    """유튜브 자동완성 — 사람들이 실제로 검색하는 표현을 알려준다. (무료, 키 불필요)"""
+    q = (request.args.get("q") or "").strip()
+    hl = request.args.get("hl") or "ko"
+    if not q:
+        return jsonify({"suggestions": []})
+    try:
+        url = ("https://suggestqueries.google.com/complete/search?client=firefox&ds=yt"
+               f"&hl={urllib.parse.quote(hl)}&q={urllib.parse.quote(q)}")
+        data = http_get_json(url)
+        suggestions = [s for s in (data[1] if len(data) > 1 else []) if s and s != q][:8]
+    except Exception:
+        suggestions = []  # 추천이 안 떠도 검색은 되니까 조용히 넘어간다
+    return jsonify({"suggestions": suggestions})
+
+
+def search_youtube_videos(q, limit=9):
+    """yt-dlp 내장 검색. 목록 정보만 가져와서 빠르다 (영상 페이지 접속 안 함)."""
+    opts = {"quiet": True, "no_warnings": True, "extract_flat": True}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(f"ytsearch{limit}:{q}", download=False)
+    results = []
+    for e in info.get("entries") or []:
+        vid = e.get("id")
+        if not vid:
+            continue
+        thumbs = e.get("thumbnails") or []
+        results.append({
+            "title": e.get("title") or "(제목 없음)",
+            "duration": e.get("duration"),
+            "views": e.get("view_count"),
+            "channel": e.get("channel") or e.get("uploader"),
+            "thumb": thumbs[-1].get("url") if thumbs else None,
+            "url": e.get("url") or f"https://www.youtube.com/watch?v={vid}",
+            "embed": f"https://www.youtube.com/embed/{vid}?autoplay=1",
+        })
+    return results
+
+
+def search_tiktok_videos(q, limit=12):
+    """tikwm.com 검색 API — 틱톡샵 안전망에 이미 쓰는 서비스라 의존이 새로 늘지는 않는다.
+
+    무료라 초당 1회 수준의 제한이 있지만 검색 용도로는 충분하다.
+    이 서비스가 멈추면 화면이 '새 탭으로 검색' 버튼을 대신 보여준다.
+    """
+    from curl_cffi import requests
+    r = requests.get("https://www.tikwm.com/api/feed/search",
+                     params={"keywords": q, "count": limit},
+                     impersonate="chrome", timeout=30)
+    data = r.json() or {}
+    if data.get("code") != 0:
+        raise RuntimeError(data.get("msg") or "검색 서비스 응답 오류")
+    results = []
+    for v in (data.get("data") or {}).get("videos") or []:
+        cover, play = v.get("cover"), v.get("play")
+        if cover and cover.startswith("/"):
+            cover = "https://www.tikwm.com" + cover
+        if play and play.startswith("/"):
+            play = "https://www.tikwm.com" + play
+        author = (v.get("author") or {}).get("unique_id") or ""
+        results.append({
+            "title": v.get("title") or "(제목 없음)",
+            "duration": v.get("duration"),
+            "views": v.get("play_count"),
+            "channel": (v.get("author") or {}).get("nickname"),
+            "thumb": cover,
+            "play": play,  # 사이트 안에서 바로 재생할 임시 mp4 주소 (유효기간 있음)
+            "url": f"https://www.tiktok.com/@{author}/video/{v.get('video_id')}",
+        })
+    return results
+
+
+@app.route("/api/keyword/search")
+def api_keyword_search():
+    q = (request.args.get("q") or "").strip()
+    platform = request.args.get("platform") or ""
+    if not q:
+        return jsonify({"error": "검색어를 입력해주세요."}), 400
+    try:
+        if platform == "youtube":
+            return jsonify({"results": search_youtube_videos(q)})
+        if platform == "tiktok":
+            return jsonify({"results": search_tiktok_videos(q)})
+        return jsonify({"error": "지원하지 않는 사이트예요."}), 400
+    except Exception as e:
+        name = "유튜브" if platform == "youtube" else "틱톡"
+        return jsonify({"error": f"{name} 검색이 지금 안 돼요. '새 탭으로 검색' 버튼으로 직접 찾아보세요.",
+                        "detail": str(e)[:100]}), 502
+
+
+# 리뷰에서 단어를 셀 때 빼는 흔한 말들 (검색 키워드가 못 되는 것들)
+REVIEW_STOPWORDS = {
+    # 감탄·정도 표현
+    "정말", "너무", "진짜", "완전", "아주", "매우", "엄청", "그냥", "조금", "약간", "살짝",
+    "좋아요", "좋은", "좋고", "좋네요", "좋습니다", "좋았어요", "좋음", "만족", "만족합니다",
+    "괜찮아요", "괜찮은", "최고", "추천", "추천합니다", "강추",
+    # 문장을 잇는 말
+    "그리고", "그래서", "근데", "그런데", "하지만", "그래도", "혹시", "역시", "일단", "다시",
+    "같아요", "같은", "같이", "해서", "해도", "하면", "하니", "했는데", "있는", "있어서",
+    "없어서", "때문에", "정도", "느낌", "생각", "사람", "제가", "저는", "이거", "이건", "그거",
+    # 쇼핑몰 상투어 (영상 검색어로는 쓸모없는 말)
+    "배송", "빠른", "빠르고", "빨라요", "주문", "구매", "재구매", "구입", "가격", "가성비",
+    "포장", "도착", "쿠팡", "리뷰", "후기", "판매자", "상품", "제품", "물건", "사용", "사용중",
+    "사용하고", "쓰고", "쓰기", "샀는데", "샀어요", "사서",
+    # 영어 흔한 말
+    "the", "and", "for", "with", "this", "that", "very", "good", "nice", "it",
+}
+
+# 단어 끝에 자주 붙는 조사 한 글자 (제품이/제품을 → 제품)
+TRAILING_PARTICLES = set("이가을를은는도에의와과만요로")
+
+
+@app.route("/api/keyword/analyze-reviews", methods=["POST"])
+def api_keyword_analyze_reviews():
+    """쿠팡 리뷰를 붙여넣으면 자주 나온 단어를 세어준다. (자동 수집은 쿠팡이 막아서 붙여넣기 방식)"""
+    text = ((request.json or {}).get("text") or "").strip()
+    if len(text) < 20:
+        return jsonify({"error": "리뷰 내용이 너무 짧아요. 쿠팡 리뷰 페이지에서 글을 드래그해 복사한 뒤 통째로 붙여넣어주세요."}), 400
+    counts = Counter()
+    for w in re.findall(r"[가-힣a-zA-Z]{2,}", text):
+        w = w.lower()
+        if len(w) >= 3 and w[-1] in TRAILING_PARTICLES:
+            w = w[:-1]
+        if w in REVIEW_STOPWORDS or len(w) < 2:
+            continue
+        counts[w] += 1
+    top = [{"word": w, "count": c} for w, c in counts.most_common(20) if c >= 2]
+    if not top:
+        return jsonify({"error": "두 번 이상 나온 단어가 없어요. 리뷰를 더 많이 붙여넣어주세요."}), 400
+    return jsonify({"words": top})
 
 
 def watch_parent_app():
