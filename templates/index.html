@@ -433,6 +433,17 @@ async function transcribe(id) {
   refresh();
 }
 
+async function downloadSubs(id) {
+  const res = await fetch('/api/download-subs', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({job_id: id})
+  });
+  const data = await res.json();
+  if (!res.ok) alert(data.error || '문제가 생겼어요.');
+  refresh();
+}
+
 let quitting = false;
 
 async function quitApp() {
@@ -526,7 +537,8 @@ async function refresh() {
       ${j.edit_file ? `<div class="err" style="color:#2e7d32">✅ 편집용 파일도 만들었어요 — ${esc(j.edit_file)}</div>` : ''}
       ${j.status === '완료' && !j.subs && !j.sub_running ? `
       <div class="subs-btns"><button class="mini" onclick="transcribe('${j.id}')">${
-        j.sub_status ? '🔁 자막 만들기 다시 시도' : '🎧 소리 듣고 자막 만들기'}</button></div>` : ''}
+        j.sub_status ? '🔁 자막 만들기 다시 시도' : '🎧 소리 듣고 자막 만들기'}</button>${
+        j.sub_available ? `<button class="mini" onclick="downloadSubs('${j.id}')">💬 자막 다운받기</button>` : ''}</div>` : ''}
       ${j.sub_status ? `<div class="sub-progress">🎧 ${esc(j.sub_status)}</div>` : ''}
       ${j.subs && j.subs.length ? `
       <details class="subs" data-id="${j.id}">
