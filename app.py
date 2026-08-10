@@ -871,6 +871,9 @@ def search_tiktok_videos(q, limit=12):
     r = requests.get("https://www.tikwm.com/api/feed/search",
                      params={"keywords": q, "count": limit},
                      impersonate="chrome", timeout=30)
+    # tikwm이 클라우드플레어 차단을 켜면 JSON 대신 HTML을 준다 → 로그인·계정과 무관, 잠깐 막힌 것
+    if not (r.text or "").strip().startswith("{"):
+        raise RuntimeError("틱톡 검색 서비스(tikwm)가 잠깐 막혔어요. 잠시 후 다시 하거나 '새 탭으로 검색'을 쓰세요.")
     data = r.json() or {}
     if data.get("code") != 0:
         raise RuntimeError(data.get("msg") or "검색 서비스 응답 오류")
@@ -890,6 +893,11 @@ def search_tiktok_videos(q, limit=12):
             "thumb": cover,
             "play": play,  # 사이트 안에서 바로 재생할 임시 mp4 주소 (유효기간 있음)
             "url": f"https://www.tiktok.com/@{author}/video/{v.get('video_id')}",
+            # 핫 순위표용 통계 (키워드 탭은 이 필드들을 안 써서 영향 없음)
+            "create_time": v.get("create_time"),
+            "comments": v.get("comment_count"),
+            "likes": v.get("digg_count"),
+            "shares": v.get("share_count"),
         })
     return results
 
@@ -952,6 +960,98 @@ def api_keyword_analyze_reviews():
     if not top:
         return jsonify({"error": "두 번 이상 나온 단어가 없어요. 리뷰를 더 많이 붙여넣어주세요."}), 400
     return jsonify({"words": top})
+
+
+# ────────────────────────────────────────────────────────────
+# 틱톡 핫 순위표 — 위험 0 (로그인 없음, 계정 안 씀, tikwm 공개 API만)
+# ────────────────────────────────────────────────────────────
+
+TIKTOK_SORTS = {"velocity", "views", "comments", "likes", "newest"}
+DEFAULT_TIKTOK_CRITERIA = {"max_age_days": 7, "min_views": 0,
+                           "min_comments": 0, "min_likes": 0, "sort_by": "velocity"}
+
+
+def clean_tiktok_criteria(c):
+    c = c or {}
+    return {
+        "max_age_days": _safe_int(c.get("max_age_days")),
+        "min_views": _safe_int(c.get("min_views")),
+        "min_comments": _safe_int(c.get("min_comments")),
+        "min_likes": _safe_int(c.get("min_likes")),
+        "sort_by": c.get("sort_by") if c.get("sort_by") in TIKTOK_SORTS else "velocity",
+    }
+
+
+def rank_hot(items, max_age_days=0, min_views=0, min_comments=0, min_likes=0, sort_by="velocity"):
+    """가변 기준(최근 N일·최소 조회·댓글·좋아요)으로 걸러 순위표를 만든다."""
+    now = time.time()
+    max_age_h = max_age_days * 24
+    out, seen = [], set()
+    for it in items:
+        ts = it.get("create_time")
+        key = it.get("url")
+        if not ts or not key or key in seen:
+            continue
+        age_h = (now - ts) / 3600
+        if max_age_h and age_h > max_age_h:
+            continue
+        if min_views and (it.get("views") or 0) < min_views:
+            continue
+        if min_comments and (it.get("comments") or 0) < min_comments:
+            continue
+        if min_likes and (it.get("likes") or 0) < min_likes:
+            continue
+        seen.add(key)
+        it = dict(it)
+        it["age_hours"] = round(age_h, 1)
+        it["views_per_hour"] = round((it.get("views") or 0) / max(age_h, 0.1))
+        out.append(it)
+    keyfns = {
+        "velocity": lambda r: r["views_per_hour"],
+        "views": lambda r: r.get("views") or 0,
+        "comments": lambda r: r.get("comments") or 0,
+        "likes": lambda r: r.get("likes") or 0,
+        "newest": lambda r: r.get("create_time") or 0,
+    }
+    out.sort(key=keyfns.get(sort_by, keyfns["velocity"]), reverse=True)
+    return out
+
+
+def tiktok_hot_config():
+    s = load_settings()
+    return {
+        "keywords": s.get("tiktok_keywords") or [],
+        "criteria": {**DEFAULT_TIKTOK_CRITERIA, **(s.get("tiktok_criteria") or {})},
+    }
+
+
+@app.route("/api/tiktok/config")
+def api_tiktok_config():
+    cfg = tiktok_hot_config()
+    return jsonify({**cfg, "sorts": sorted(TIKTOK_SORTS)})
+
+
+@app.route("/api/tiktok/hot", methods=["POST"])
+def api_tiktok_hot():
+    body = request.json or {}
+    keywords = [k.strip() for k in (body.get("keywords") or []) if k.strip()][:5]
+    criteria = clean_tiktok_criteria(body.get("criteria"))
+    if not keywords:
+        return jsonify({"error": "찾을 키워드를 하나 이상 넣어주세요."}), 400
+    update_settings(tiktok_keywords=keywords, tiktok_criteria=criteria)
+
+    items, errors = [], []
+    for i, kw in enumerate(keywords):
+        if i:
+            time.sleep(1.2)  # tikwm 초당 1회 제한을 지켜 예의 있게
+        try:
+            items += search_tiktok_videos(kw, limit=20)
+        except Exception as e:
+            errors.append(f"'{kw}': {str(e)[:70]}")
+
+    ranked = rank_hot(items, **criteria)
+    return jsonify({"results": ranked, "total_collected": len(items),
+                    "errors": errors, "criteria": criteria})
 
 
 # ────────────────────────────────────────────────────────────

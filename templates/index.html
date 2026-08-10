@@ -89,6 +89,11 @@
   }
   .tabbar button:hover { color: #555; background: none; }
   .tabbar button.active { color: #4a6cf7; border-bottom-color: #4a6cf7; }
+  .tabbar button.locked { color: #bbb; cursor: not-allowed; }
+  .tabbar button.locked:hover { color: #bbb; }
+  .safe-box { background: #edf7ed; border: 1px solid #a5d6a7; border-left: 4px solid #43a047;
+              border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; color: #245c27;
+              font-size: 13.5px; line-height: 1.6; }
 
   /* ── 키워드 찾기 탭 ── */
   .kw-row { display: flex; gap: 10px; }
@@ -201,7 +206,9 @@
   <div class="tabbar" id="tabbar">
     <button class="active" data-tab="download" onclick="switchTab('download')">⬇️ 다운로드</button>
     <button data-tab="keyword" onclick="switchTab('keyword')">🔍 키워드 찾기</button>
-    <button data-tab="insta" onclick="switchTab('insta')">🔥 인스타 핫</button>
+    <button data-tab="tiktok" onclick="switchTab('tiktok')">🔥 틱톡 핫</button>
+    <button class="locked" data-tab="insta" disabled
+            title="계정 밴 위험 때문에 잠가뒀어요. 부계정 전용 별도 기기가 준비되면 열 거예요.">🔒 인스타 핫</button>
   </div>
 
   <div id="tab-download">
@@ -253,6 +260,40 @@
       <div class="chips" id="review-result"></div>
     </details>
   </div><!-- /tab-keyword -->
+
+  <div id="tab-tiktok" style="display:none">
+    <div class="safe-box">
+      ✅ 이 탭은 <b>로그인이 필요 없고, 친구님 계정을 쓰지 않아요.</b> 그래서 계정 밴 걱정이 없어요.
+      (공개 검색 서비스에 물어보는 방식이라, 그 서비스가 잠깐 쉬면 결과가 안 나올 수 있는데 그게 다예요.)
+    </div>
+
+    <div class="setup-label">찾을 키워드 (한 줄에 하나, 여러 개 가능)</div>
+    <textarea id="tt-keywords" style="height:80px;margin-top:6px"
+      placeholder="예:&#10;청소 꿀팁&#10;cleaning hack&#10;스텐 얼룩"></textarea>
+    <p class="hint">영어로 넣으면 훨씬 많이 나와요. 키워드 찾기 탭에서 번역한 말을 여기에 넣어도 좋아요.</p>
+
+    <div class="criteria-box">
+      <div class="setup-label">🔥 핫한 기준 (숫자를 바꾸면 순위가 바뀌어요)</div>
+      <div class="criteria-row">
+        <label>최근 <input type="number" id="tt-age" min="0" style="width:64px"> 일 이내</label>
+        <label>최소 조회수 <input type="number" id="tt-views" min="0" style="width:100px"></label>
+        <label>최소 댓글 <input type="number" id="tt-comments" min="0" style="width:84px"></label>
+        <label>정렬
+          <select id="tt-sort">
+            <option value="velocity">시간당 조회 급상승</option>
+            <option value="views">조회수 많은 순</option>
+            <option value="comments">댓글 많은 순</option>
+            <option value="likes">좋아요 많은 순</option>
+            <option value="newest">최신 순</option>
+          </select>
+        </label>
+      </div>
+      <p class="hint">0 = 제한 없음. 예: "최근 3일 · 최소 조회 10만 · 시간당 조회 급상승"으로 지금 뜨는 걸 찾아요.</p>
+      <button class="primary" style="margin-top:10px" onclick="tiktokSearch()">🔥 핫 영상 찾기</button>
+    </div>
+
+    <div id="tt-results"></div>
+  </div><!-- /tab-tiktok -->
 
   <div id="tab-insta" style="display:none">
     <div class="danger-box">
@@ -411,6 +452,7 @@ async function quitApp() {
   document.getElementById('offline').style.display = 'none';
   document.getElementById('tabbar').style.display = 'none';
   document.getElementById('tab-keyword').style.display = 'none';
+  document.getElementById('tab-tiktok').style.display = 'none';
   document.getElementById('tab-insta').style.display = 'none';
   document.getElementById('bye').style.display = 'block';
 }
@@ -527,10 +569,11 @@ refresh();
 /* ─────────── 여기부터 키워드 찾기 탭 (기존 다운로드 코드와 독립) ─────────── */
 
 function switchTab(name) {
-  ['download', 'keyword', 'insta'].forEach(t =>
+  ['download', 'keyword', 'tiktok', 'insta'].forEach(t =>
     document.getElementById('tab-' + t).style.display = t === name ? '' : 'none');
   document.querySelectorAll('#tabbar button').forEach(b =>
     b.classList.toggle('active', b.dataset.tab === name));
+  if (name === 'tiktok' && !tiktokLoaded) loadTiktokConfig();
   if (name === 'insta' && !instaLoaded) loadInstaConfig();
 }
 
@@ -755,7 +798,90 @@ async function analyzeReviews() {
       })}">${esc(w.word)} <b>${w.count}</b></button>`).join('');
 }
 
-/* ─────────── 🔥 인스타 핫 탭 ─────────── */
+/* ─────────── 🔥 틱톡 핫 탭 (위험 0) ─────────── */
+
+let tiktokLoaded = false;
+
+async function loadTiktokConfig() {
+  try {
+    const cfg = await (await fetch('/api/tiktok/config')).json();
+    document.getElementById('tt-keywords').value = (cfg.keywords || []).join('\n');
+    const c = cfg.criteria || {};
+    document.getElementById('tt-age').value = c.max_age_days ?? 7;
+    document.getElementById('tt-views').value = c.min_views ?? 0;
+    document.getElementById('tt-comments').value = c.min_comments ?? 0;
+    document.getElementById('tt-sort').value = c.sort_by || 'velocity';
+    tiktokLoaded = true;
+  } catch (e) {}
+}
+
+function ttCriteria() {
+  return {
+    max_age_days: +document.getElementById('tt-age').value || 0,
+    min_views: +document.getElementById('tt-views').value || 0,
+    min_comments: +document.getElementById('tt-comments').value || 0,
+    min_likes: 0,
+    sort_by: document.getElementById('tt-sort').value,
+  };
+}
+
+async function tiktokSearch() {
+  const keywords = document.getElementById('tt-keywords').value.split('\n').map(s => s.trim()).filter(Boolean);
+  const box = document.getElementById('tt-results');
+  if (!keywords.length) { alert('찾을 키워드를 먼저 넣어주세요!'); return; }
+  box.innerHTML = '<div class="empty">⏳ 틱톡에서 찾는 중이에요... (키워드가 여러 개면 조금 걸려요)</div>';
+  let data, ok;
+  try {
+    const res = await fetch('/api/tiktok/hot', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({keywords, criteria: ttCriteria()})});
+    ok = res.ok;
+    data = await res.json();
+  } catch (e) { ok = false; data = {error: '찾는 중 문제가 생겼어요. 다시 시도해주세요.'}; }
+  if (!ok) { box.innerHTML = `<div class="empty">😢 ${esc(data.error || '문제가 생겼어요.')}</div>`; return; }
+  renderTiktokResults(data);
+}
+
+function renderTiktokResults(data) {
+  const box = document.getElementById('tt-results');
+  const results = data.results || [];
+  const errNote = (data.errors && data.errors.length)
+    ? `<div class="warn">일부 키워드는 못 가져왔어요: ${esc(data.errors.join(' / '))}</div>` : '';
+  if (!results.length) {
+    box.innerHTML = errNote + `<div class="empty">기준에 맞는 영상이 없어요. 모은 영상은 ${data.total_collected}개예요.<br>
+      기간을 늘리거나(예: 30일) 최소 조회수·댓글을 낮춰보세요.</div>`;
+    return;
+  }
+  const grid = results.map((v, rank) => {
+    const i = vids.push({...v, platform: 'tiktok'}) - 1;
+    const stat = [
+      v.views != null ? `조회 <b>${fmtViews(v.views)}</b>` : '',
+      v.comments != null ? `댓글 ${fmtViews(v.comments).replace('회', '')}` : '',
+      v.likes != null ? `♥ ${fmtViews(v.likes).replace('회', '')}` : '',
+    ].filter(Boolean).join(' · ');
+    return `
+    <div class="vid">
+      <div class="thumb-wrap" onclick="openPlayer(${i})">
+        <div class="rank-num">${rank + 1}위</div>
+        ${v.thumb ? `<img src="${escAttr(v.thumb)}" loading="lazy" alt="">` : ''}
+        <div class="playmark">▶</div>
+        ${v.duration ? `<div class="dur">${fmtDur(v.duration)}</div>` : ''}
+      </div>
+      <div class="vt">${esc(v.title)}</div>
+      <div class="vm">${esc(v.channel || '')} · ${v.age_hours < 48 ? v.age_hours + '시간 전' : Math.round(v.age_hours / 24) + '일 전'} · 시간당 조회 ${fmtViews(v.views_per_hour)}</div>
+      <div class="stat">${stat}</div>
+      <div class="vbtns">
+        <button class="mini" onclick="grabVideo(this, ${i})">⬇️ 받기</button>
+        <button class="mini" onclick="window.open('${escAttr(v.url)}')">원본 ↗</button>
+      </div>
+    </div>`;
+  }).join('');
+  box.innerHTML = errNote +
+    `<div class="sec-title">🔥 핫 영상 ${results.length}개 <span class="searching">모은 ${data.total_collected}개 중 기준 통과</span></div>
+     <div class="vid-grid tiktok">${grid}</div>`;
+}
+
+/* ─────────── 🔒 인스타 핫 탭 (지금은 잠김) ─────────── */
 
 let instaLoaded = false;
 
