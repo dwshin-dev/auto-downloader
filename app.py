@@ -26,9 +26,28 @@ MAX_PARALLEL = 3  # 사이트 차단 방지를 위해 동시에 3개까지만
 RETRIES = 3
 
 
+def load_settings():
+    try:
+        return json.loads(SETTINGS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+settings_lock = threading.Lock()
+
+
+def update_settings(**fields):
+    """settings.json을 통째로 덮어쓰지 않고 필요한 값만 고친다 (동시 쓰기 안전)."""
+    with settings_lock:
+        data = load_settings()
+        data.update(fields)
+        SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+        return data
+
+
 def get_download_dir():
     try:
-        return Path(json.loads(SETTINGS_FILE.read_text())["download_dir"])
+        return Path(load_settings()["download_dir"])
     except Exception:
         return DEFAULT_DOWNLOAD_DIR
 
@@ -583,8 +602,7 @@ def api_choose_folder():
                                 capture_output=True, text=True, timeout=180)
         chosen = result.stdout.strip()
         if result.returncode == 0 and chosen:
-            SETTINGS_FILE.write_text(
-                json.dumps({"download_dir": chosen.rstrip("/")}, ensure_ascii=False))
+            update_settings(download_dir=chosen.rstrip("/"))  # 다른 설정(인스타 등)은 보존
     except subprocess.TimeoutExpired:
         pass  # 선택창을 오래 안 닫으면 그냥 기존 설정 유지
     return jsonify({"download_dir": str(get_download_dir())})
@@ -934,6 +952,129 @@ def api_keyword_analyze_reviews():
     if not top:
         return jsonify({"error": "두 번 이상 나온 단어가 없어요. 리뷰를 더 많이 붙여넣어주세요."}), 400
     return jsonify({"words": top})
+
+
+# ────────────────────────────────────────────────────────────
+# 인스타 핫 릴스 찾기 (insta_hot.py에 실제 로직, 여기는 얇은 연결부)
+# ⚠️ 비공식 API라 계정 위험이 있어 insta_hot이 안전장치를 강제한다.
+# 여기가 다 죽어도 다운로드·키워드 기능은 그대로 돈다.
+# ────────────────────────────────────────────────────────────
+
+DEFAULT_INSTA_CRITERIA = {"max_age_hours": 24, "min_likes": 0,
+                          "min_comments": 0, "min_views": 0, "sort_by": "velocity"}
+
+
+def _safe_int(v):
+    try:
+        return max(0, int(float(v)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def clean_criteria(c):
+    import insta_hot
+    c = c or {}
+    return {
+        "max_age_hours": _safe_int(c.get("max_age_hours")),
+        "min_likes": _safe_int(c.get("min_likes")),
+        "min_comments": _safe_int(c.get("min_comments")),
+        "min_views": _safe_int(c.get("min_views")),
+        "sort_by": c.get("sort_by") if c.get("sort_by") in insta_hot.SORTS else "velocity",
+    }
+
+
+def insta_config():
+    s = load_settings()
+    return {
+        "browser": s.get("insta_browser"),
+        "accounts": s.get("insta_accounts") or [],
+        "hashtags": s.get("insta_hashtags") or [],
+        "criteria": {**DEFAULT_INSTA_CRITERIA, **(s.get("insta_criteria") or {})},
+    }
+
+
+@app.route("/api/insta/config", methods=["GET", "POST"])
+def api_insta_config():
+    import insta_hot
+    if request.method == "POST":
+        body = request.json or {}
+        fields = {}
+        if "browser" in body:
+            fields["insta_browser"] = (body["browser"] or "").strip() or None
+        if "accounts" in body:
+            fields["insta_accounts"] = [a.strip().lstrip("@") for a in body["accounts"] if a.strip()][:30]
+        if "hashtags" in body:
+            fields["insta_hashtags"] = [h.strip().lstrip("#") for h in body["hashtags"] if h.strip()][:20]
+        if "criteria" in body:
+            fields["insta_criteria"] = clean_criteria(body["criteria"])
+        update_settings(**fields)
+    cfg = insta_config()
+    return jsonify({**cfg, "browsers": ["chrome", "safari", "edge", "brave", "whale", "firefox", "chromium"],
+                    "safety": insta_hot.limiter.status()})
+
+
+@app.route("/api/insta/test", methods=["POST"])
+def api_insta_test():
+    import insta_hot
+    browser = (request.json or {}).get("browser") or insta_config()["browser"]
+    if not browser:
+        return jsonify({"error": "먼저 어느 브라우저에 로그인했는지 골라주세요."}), 400
+    try:
+        insta_hot.test_session(browser)
+        update_settings(insta_browser=browser)
+        return jsonify({"ok": True, "message": "연결됐어요! 이제 핫 릴스를 찾을 수 있어요."})
+    except insta_hot.SessionError as e:
+        return jsonify({"error": str(e)}), 400
+    except insta_hot.RestingError as e:
+        return jsonify({"error": str(e), "resting": True}), 429
+    except Exception as e:
+        return jsonify({"error": f"확인 중 문제가 생겼어요: {str(e)[:80]}"}), 502
+
+
+@app.route("/api/insta/search", methods=["POST"])
+def api_insta_search():
+    import insta_hot
+    cfg = insta_config()
+    browser = cfg["browser"]
+    if not browser:
+        return jsonify({"error": "먼저 아래 설정에서 브라우저를 고르고 '연결 확인'을 해주세요."}), 400
+    if not cfg["accounts"] and not cfg["hashtags"]:
+        return jsonify({"error": "지켜볼 계정이나 해시태그를 하나 이상 넣어주세요."}), 400
+
+    # 화면에서 방금 바꾼 기준이 있으면 그걸 우선 쓴다 (저장도 함께)
+    override = (request.json or {}).get("criteria")
+    if override:
+        update_settings(insta_criteria=clean_criteria(override))
+        cfg = insta_config()
+
+    try:
+        cookies = insta_hot.load_cookies(browser)
+    except insta_hot.SessionError as e:
+        return jsonify({"error": str(e)}), 400
+
+    reels, errors = [], []
+    for username in cfg["accounts"]:
+        try:
+            reels += insta_hot.fetch_account_reels(username, cookies)
+        except insta_hot.RestingError as e:
+            return jsonify({"error": str(e), "resting": True, "safety": insta_hot.limiter.status()}), 429
+        except insta_hot.SessionError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            errors.append(f"@{username}: {str(e)[:60]}")
+    for tag in cfg["hashtags"]:
+        try:
+            reels += insta_hot.fetch_hashtag_reels(tag, cookies)
+        except insta_hot.RestingError as e:
+            return jsonify({"error": str(e), "resting": True, "safety": insta_hot.limiter.status()}), 429
+        except insta_hot.SessionError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            errors.append(f"#{tag}: {str(e)[:60]}")
+
+    ranked = insta_hot.rank_reels(reels, **cfg["criteria"])
+    return jsonify({"results": ranked, "total_collected": len(reels), "errors": errors,
+                    "criteria": cfg["criteria"], "safety": insta_hot.limiter.status()})
 
 
 def watch_parent_app():

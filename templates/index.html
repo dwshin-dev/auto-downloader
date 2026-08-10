@@ -157,6 +157,40 @@
   .toast { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
            background: #1a1a2e; color: #fff; font-size: 14px; font-weight: 600;
            padding: 12px 20px; border-radius: 10px; z-index: 60; display: none; }
+
+  /* ── 인스타 핫 탭 ── */
+  .danger-box { background: #fff4f4; border: 1.5px solid #ffb3b3; border-left: 4px solid #e53935;
+                border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; color: #7a1c1c;
+                font-size: 13.5px; line-height: 1.6; }
+  .danger-box b { color: #b3261e; }
+  .danger-box ul { margin: 8px 0 0; padding-left: 18px; }
+  .danger-box li { margin-bottom: 5px; }
+  .rest-box { background: #fff8e1; border: 1.5px solid #f0b400; border-radius: 10px;
+              padding: 14px 16px; margin-bottom: 14px; color: #7a5d00; font-size: 14px; line-height: 1.6; }
+  details.insta-setup { background: #fff; border: 1px solid #e5e7ec; border-radius: 10px;
+                        padding: 12px 16px; margin-bottom: 14px; }
+  details.insta-setup summary { font-size: 14px; font-weight: 700; color: #4a6cf7; cursor: pointer; }
+  .setup-block { margin: 16px 0; }
+  .setup-label { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+  .setup-block textarea { height: 76px; margin-top: 6px; }
+  .setup-block select, .criteria-row select {
+    padding: 10px 12px; font-size: 14px; border: 1.5px solid #d5d8de; border-radius: 10px;
+    font-family: inherit; background: #fff; }
+  #insta-browser { flex: 1; }
+  .setup-msg { font-size: 13px; margin-top: 8px; line-height: 1.5; }
+  .setup-msg.ok { color: #2e7d32; }
+  .setup-msg.bad { color: #c62828; }
+  .criteria-box { background: #fff; border: 1px solid #e5e7ec; border-radius: 10px;
+                  padding: 14px 16px; margin-bottom: 18px; }
+  .criteria-row { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: center; margin-top: 10px; }
+  .criteria-row label { font-size: 13.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .criteria-row input { padding: 8px 10px; font-size: 14px; border: 1.5px solid #d5d8de;
+                        border-radius: 8px; font-family: inherit; }
+  .safety-tag { color: #999; font-weight: 600; }
+  .rank-num { position: absolute; left: 6px; top: 6px; background: rgba(0,0,0,.75); color: #fff;
+              font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 12px; }
+  .vid .stat { font-size: 11.5px; color: #555; padding: 2px 10px 0; line-height: 1.5; }
+  .vid .stat b { color: #e53935; }
 </style>
 </head>
 <body>
@@ -167,6 +201,7 @@
   <div class="tabbar" id="tabbar">
     <button class="active" data-tab="download" onclick="switchTab('download')">⬇️ 다운로드</button>
     <button data-tab="keyword" onclick="switchTab('keyword')">🔍 키워드 찾기</button>
+    <button data-tab="insta" onclick="switchTab('insta')">🔥 인스타 핫</button>
   </div>
 
   <div id="tab-download">
@@ -218,6 +253,72 @@
       <div class="chips" id="review-result"></div>
     </details>
   </div><!-- /tab-keyword -->
+
+  <div id="tab-insta" style="display:none">
+    <div class="danger-box">
+      <b>⚠️ 먼저 꼭 읽어주세요 — 계정이 위험할 수 있어요</b>
+      <ul>
+        <li>이 기능은 인스타가 공식 허용하지 않는 방식이에요. 쓰다 보면 인스타가
+            <b>본인 확인(셀피·전화)</b>을 요구하거나 계정을 <b>잠글 수</b> 있어요.</li>
+        <li>그래서 <b>반드시 버리는 부계정으로만</b> 쓰세요. <b>본계정은 절대 안 돼요.</b></li>
+        <li>부계정은 본계정과 <b>전화번호·기기·같은 계정센터</b>로 엮지 마세요.
+            엮여 있으면 본계정까지 같이 잠길 수 있어요.</li>
+        <li>안전을 위해 하루 사용량이 제한돼 있고, 위험 신호가 뜨면 그날은 저절로 멈춰요.</li>
+      </ul>
+    </div>
+
+    <div id="insta-rest" class="rest-box" style="display:none"></div>
+
+    <details class="insta-setup" id="insta-setup">
+      <summary>⚙️ 처음 설정 (한 번만) — 어느 부계정으로, 무엇을 지켜볼지</summary>
+
+      <div class="setup-block">
+        <div class="setup-label">1. 부계정으로 로그인한 브라우저를 고르세요</div>
+        <p class="hint">그 브라우저에서 인스타에 <b>부계정으로</b> 로그인만 해두면 돼요. 아이디·비밀번호는 저장하지 않아요.</p>
+        <div class="kw-row" style="margin-top:8px">
+          <select id="insta-browser"></select>
+          <button class="ghost" onclick="instaTest()">🔗 연결 확인</button>
+        </div>
+        <div id="insta-test-msg" class="setup-msg"></div>
+      </div>
+
+      <div class="setup-block">
+        <div class="setup-label">2. 지켜볼 벤치마킹 계정 (한 줄에 하나, @는 빼도 돼요)</div>
+        <textarea id="insta-accounts" placeholder="예:&#10;cleaninghacks&#10;kitchen.tips"></textarea>
+      </div>
+
+      <div class="setup-block">
+        <div class="setup-label">3. 지켜볼 해시태그 (선택, 한 줄에 하나, #는 빼도 돼요)</div>
+        <textarea id="insta-hashtags" placeholder="예:&#10;청소꿀팁&#10;스텐냄비"></textarea>
+        <p class="hint">해시태그는 인스타가 최근 24시간 것만, 그것도 조금씩만 보여줘서 계정 감시보다 약해요.</p>
+      </div>
+
+      <button class="primary" onclick="instaSaveConfig(true)">💾 저장</button>
+    </details>
+
+    <div class="criteria-box">
+      <div class="setup-label">🔥 핫한 기준 (여기 숫자를 바꾸면 순위가 바뀌어요)</div>
+      <div class="criteria-row">
+        <label>최근 <input type="number" id="cr-age" min="0" style="width:64px"> 시간 이내</label>
+        <label>최소 좋아요 <input type="number" id="cr-likes" min="0" style="width:84px"></label>
+        <label>최소 댓글 <input type="number" id="cr-comments" min="0" style="width:84px"></label>
+        <label>정렬
+          <select id="cr-sort">
+            <option value="velocity">시간당 좋아요 급상승</option>
+            <option value="likes">좋아요 많은 순</option>
+            <option value="comments">댓글 많은 순</option>
+            <option value="views">조회수 많은 순</option>
+            <option value="newest">최신 순</option>
+          </select>
+        </label>
+      </div>
+      <p class="hint">0 = 제한 없음. 예: "최근 8시간 · 최소 댓글 1000 · 시간당 좋아요 순"으로 지금 뜨는 걸 찾아요.
+        <span id="insta-safety" class="safety-tag"></span></p>
+      <button class="primary" style="margin-top:10px" onclick="instaSearch()">🔥 핫 릴스 찾기</button>
+    </div>
+
+    <div id="insta-results"></div>
+  </div><!-- /tab-insta -->
 
   <div class="player-bg" id="player" onclick="if(event.target===this)closePlayer()">
     <div class="player-box">
@@ -310,6 +411,7 @@ async function quitApp() {
   document.getElementById('offline').style.display = 'none';
   document.getElementById('tabbar').style.display = 'none';
   document.getElementById('tab-keyword').style.display = 'none';
+  document.getElementById('tab-insta').style.display = 'none';
   document.getElementById('bye').style.display = 'block';
 }
 
@@ -425,10 +527,11 @@ refresh();
 /* ─────────── 여기부터 키워드 찾기 탭 (기존 다운로드 코드와 독립) ─────────── */
 
 function switchTab(name) {
-  document.getElementById('tab-download').style.display = name === 'download' ? '' : 'none';
-  document.getElementById('tab-keyword').style.display = name === 'keyword' ? '' : 'none';
+  ['download', 'keyword', 'insta'].forEach(t =>
+    document.getElementById('tab-' + t).style.display = t === name ? '' : 'none');
   document.querySelectorAll('#tabbar button').forEach(b =>
     b.classList.toggle('active', b.dataset.tab === name));
+  if (name === 'insta' && !instaLoaded) loadInstaConfig();
 }
 
 // onclick 속성에 문자열을 끼워 넣으면 따옴표가 깨진다.
@@ -585,9 +688,15 @@ async function searchOne(platform, word, seq) {
 function openPlayer(i) {
   const v = vids[i];
   document.getElementById('player-title').textContent = v.title;
-  document.getElementById('player-body').innerHTML = v.platform === 'youtube'
-    ? `<iframe src="${escAttr(v.embed)}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`
-    : `<video src="${escAttr(v.play)}" controls autoplay playsinline></video>`;
+  let body;
+  if (v.platform === 'youtube')
+    body = `<iframe src="${escAttr(v.embed)}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe>`;
+  else if (v.platform === 'insta')
+    body = `<iframe src="${escAttr(v.embed)}" allow="encrypted-media" scrolling="no"
+             style="width:min(400px,90vw);height:min(640px,80vh)"></iframe>`;
+  else
+    body = `<video src="${escAttr(v.play)}" controls autoplay playsinline></video>`;
+  document.getElementById('player-body').innerHTML = body;
   document.getElementById('player-actions').innerHTML = `
     <button class="mini" onclick="grabVideo(this, ${i})">⬇️ 이 영상 받기</button>
     <button class="mini" onclick="window.open('${escAttr(v.url)}')">원본 페이지 열기 ↗</button>`;
@@ -644,6 +753,153 @@ async function analyzeReviews() {
         document.getElementById('kw-input').value = w.word;
         kwGo();
       })}">${esc(w.word)} <b>${w.count}</b></button>`).join('');
+}
+
+/* ─────────── 🔥 인스타 핫 탭 ─────────── */
+
+let instaLoaded = false;
+
+async function loadInstaConfig() {
+  try {
+    const res = await fetch('/api/insta/config');
+    const cfg = await res.json();
+    // 브라우저 선택지 채우기
+    const sel = document.getElementById('insta-browser');
+    sel.innerHTML = '<option value="">브라우저 고르기...</option>' +
+      cfg.browsers.map(b => `<option value="${b}">${b}</option>`).join('');
+    if (cfg.browser) sel.value = cfg.browser;
+    document.getElementById('insta-accounts').value = (cfg.accounts || []).join('\n');
+    document.getElementById('insta-hashtags').value = (cfg.hashtags || []).join('\n');
+    const c = cfg.criteria || {};
+    document.getElementById('cr-age').value = c.max_age_hours ?? 24;
+    document.getElementById('cr-likes').value = c.min_likes ?? 0;
+    document.getElementById('cr-comments').value = c.min_comments ?? 0;
+    document.getElementById('cr-sort').value = c.sort_by || 'velocity';
+    // 설정이 아직 없으면 설정 패널을 펼쳐서 보여준다
+    if (!cfg.browser || (!cfg.accounts.length && !cfg.hashtags.length))
+      document.getElementById('insta-setup').open = true;
+    renderSafety(cfg.safety);
+    instaLoaded = true;
+  } catch (e) {}
+}
+
+function readCriteria() {
+  return {
+    max_age_hours: +document.getElementById('cr-age').value || 0,
+    min_likes: +document.getElementById('cr-likes').value || 0,
+    min_comments: +document.getElementById('cr-comments').value || 0,
+    min_views: 0,
+    sort_by: document.getElementById('cr-sort').value,
+  };
+}
+
+function renderSafety(s) {
+  if (!s) return;
+  const tag = document.getElementById('insta-safety');
+  tag.textContent = `· 오늘 ${s.used_today}/${s.daily_cap}번 사용`;
+  const rest = document.getElementById('insta-rest');
+  if (s.resting) {
+    rest.style.display = 'block';
+    rest.innerHTML = '🛑 ' + esc(s.rest_reason || '오늘은 안전을 위해 인스타 조회를 쉬고 있어요. 내일 다시 해주세요.');
+  } else {
+    rest.style.display = 'none';
+  }
+}
+
+async function instaTest() {
+  const browser = document.getElementById('insta-browser').value;
+  const msg = document.getElementById('insta-test-msg');
+  if (!browser) { msg.className = 'setup-msg bad'; msg.textContent = '먼저 브라우저를 고르세요.'; return; }
+  msg.className = 'setup-msg';
+  msg.textContent = '🔗 연결 확인 중... (몇 초 걸려요)';
+  try {
+    const res = await fetch('/api/insta/test', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({browser})});
+    const data = await res.json();
+    if (res.ok) { msg.className = 'setup-msg ok'; msg.textContent = '✅ ' + data.message; }
+    else { msg.className = 'setup-msg bad'; msg.textContent = '❌ ' + data.error; }
+  } catch (e) {
+    msg.className = 'setup-msg bad'; msg.textContent = '❌ 확인에 실패했어요. 다시 시도해주세요.';
+  }
+}
+
+async function instaSaveConfig(closePanel) {
+  const body = {
+    browser: document.getElementById('insta-browser').value || null,
+    accounts: document.getElementById('insta-accounts').value.split('\n'),
+    hashtags: document.getElementById('insta-hashtags').value.split('\n'),
+    criteria: readCriteria(),
+  };
+  await fetch('/api/insta/config', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)});
+  if (closePanel) {
+    document.getElementById('insta-setup').open = false;
+    toast('저장했어요.');
+  }
+}
+
+async function instaSearch() {
+  await instaSaveConfig(false);  // 화면의 계정·해시태그·기준을 먼저 저장
+  const box = document.getElementById('insta-results');
+  box.innerHTML = '<div class="empty">⏳ 인스타에서 찾는 중이에요... (안전을 위해 천천히 물어봐서 조금 걸려요)</div>';
+  let data, ok;
+  try {
+    const res = await fetch('/api/insta/search', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({criteria: readCriteria()})});
+    ok = res.ok;
+    data = await res.json();
+  } catch (e) { ok = false; data = {error: '찾는 중 문제가 생겼어요. 다시 시도해주세요.'}; }
+
+  if (data.safety) renderSafety(data.safety);
+  if (!ok) {
+    box.innerHTML = `<div class="empty">${data.resting ? '🛑' : '😢'} ${esc(data.error || '문제가 생겼어요.')}</div>`;
+    return;
+  }
+  renderInstaResults(data);
+}
+
+function renderInstaResults(data) {
+  const box = document.getElementById('insta-results');
+  const results = data.results || [];
+  const errNote = (data.errors && data.errors.length)
+    ? `<div class="warn">일부는 못 가져왔어요: ${esc(data.errors.join(' / '))}</div>` : '';
+  if (!results.length) {
+    box.innerHTML = errNote + `<div class="empty">기준에 맞는 릴스가 없어요. 모은 영상은 ${data.total_collected}개예요.<br>
+      시간을 늘리거나(예: 48시간) 최소 좋아요·댓글을 낮춰보세요.</div>`;
+    return;
+  }
+  const grid = results.map((v, rank) => {
+    const i = vids.push({
+      title: v.caption || v.source, thumb: v.thumb, url: v.url, platform: 'insta',
+      embed: `https://www.instagram.com/reel/${v.shortcode}/embed/`,
+    }) - 1;
+    const stat = [
+      v.likes != null ? `좋아요 <b>${fmtViews(v.likes).replace('회','')}</b>` : '',
+      v.comments != null ? `댓글 ${fmtViews(v.comments).replace('회','')}` : '',
+      v.views != null ? `조회 ${fmtViews(v.views)}` : '',
+    ].filter(Boolean).join(' · ');
+    return `
+    <div class="vid">
+      <div class="thumb-wrap" onclick="openPlayer(${i})">
+        <div class="rank-num">${rank + 1}위</div>
+        ${v.thumb ? `<img src="${escAttr(v.thumb)}" loading="lazy" alt="">` : ''}
+        <div class="playmark">▶</div>
+      </div>
+      <div class="vt">${esc(v.caption || v.source)}</div>
+      <div class="vm">${esc(v.source)} · ${v.age_hours}시간 전 · 시간당 ♥${v.likes_per_hour}</div>
+      <div class="stat">${stat}</div>
+      <div class="vbtns">
+        <button class="mini" onclick="grabVideo(this, ${i})">⬇️ 받기</button>
+        <button class="mini" onclick="window.open('${escAttr(v.url)}')">원본 ↗</button>
+      </div>
+    </div>`;
+  }).join('');
+  box.innerHTML = errNote +
+    `<div class="sec-title">🔥 핫 릴스 ${results.length}개 <span class="searching">모은 ${data.total_collected}개 중 기준 통과</span></div>
+     <div class="vid-grid tiktok">${grid}</div>`;
 }
 </script>
 </body>
